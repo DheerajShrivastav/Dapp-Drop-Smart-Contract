@@ -201,9 +201,9 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__CampaignNotOpen();
         }
         // Allow ending before endTime if host decides to conclude early
-        // if (block.timestamp < campaign.endTime) {
-        //     revert Web3Campaigns__CampaignNotYetEnded();
-        // }
+        if (block.timestamp < campaign.endTime) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
 
         campaign.status = CampaignStatus.Ended;
         emit CampaignStatusUpdated(_campaignId, CampaignStatus.Ended);
