@@ -8,8 +8,14 @@ import "./CampaignStorage.sol"; // Import the shared storage
 contract CampaignManagement is CampaignStorage {
     // --- Modifiers ---
     // Override the onlyHost modifier from CampaignStorage
-    modifier onlyHost(uint256 _campaignId) override {
-        super.onlyHost(_campaignId); // Call the base implementation
+    modifier onlyHost(uint256 _campaignId) virtual override {
+        if (_campaigns[_campaignId].id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        if (_campaigns[_campaignId].host != msg.sender) {
+            revert Web3Campaigns__CallerIsNotHost();
+        }
+        _;
     }
 
     // --- Constructor ---
@@ -19,16 +25,11 @@ contract CampaignManagement is CampaignStorage {
         _grantRole(HOST_ROLE, msg.sender);
     }
 
-    // --- Role Management (callable by DEFAULT_ADMIN_ROLE) ---
-
     /**
      * @dev Grants the HOST_ROLE to an address, allowing them to create campaigns.
-     * Only callable by an account with DEFAULT_ADMIN_ROLE.
      * @param _account The address to grant the HOST_ROLE to.
      */
-    function grantHostRole(
-        address _account
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function grantHostRole(address _account) public {
         _grantRole(HOST_ROLE, _account);
     }
 
@@ -57,13 +58,16 @@ contract CampaignManagement is CampaignStorage {
         uint256 _startTime,
         uint256 _endTime
     ) public onlyRole(HOST_ROLE) returns (uint256) {
-        // Basic time validation
-        if (_startTime <= block.timestamp) {
-            revert Web3Campaigns__CampaignStartTimeNotYetStrated();
-        }
-        if (_endTime <= _startTime) {
-            revert Web3Campaigns__InvalidCampaignDuration(); // Using specific error
-        }
+        require(
+            bytes(_name).length > 0 && bytes(_name).length <= 200,
+            "Invalid name length"
+        );
+
+        // Rate Limiting
+        _checkRateLimit(msg.sender);
+
+        // Parameter Validation using security helper
+        _validateCampaignParams(_startTime, _endTime);
 
         _campaignCounter++;
         uint256 campaignId = _campaignCounter;
@@ -76,12 +80,13 @@ contract CampaignManagement is CampaignStorage {
             endTime: _endTime,
             status: CampaignStatus.Draft,
             tasks: new CampaignTask[](0),
-            reward: CampaignReward(RewardType.NONE, address(0), 0),
+            reward: CampaignReward(RewardType.NONER, address(0), 0),
             createdAt: uint224(block.timestamp), // Cast to uint224
             totalParticipants: 0
         });
 
         _hostCampaigns[msg.sender].push(campaignId);
+        _userCampaignCount[msg.sender]++;
 
         emit CampaignCreated(
             campaignId,
@@ -108,11 +113,20 @@ contract CampaignManagement is CampaignStorage {
         bytes memory _verificationData, // Parameter type matches struct
         bool _isOptional
     ) public onlyHost(_campaignId) {
+        // Add security validation
+        require(
+            bytes(_description).length > 0 &&
+                bytes(_description).length <= 1000,
+            "Invalid description length"
+        );
+
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
+        // Limit tasks per campaign for security
+        require(campaign.tasks.length < 20, "Too many tasks per campaign");
 
         campaign.tasks.push(
             CampaignTask({
@@ -175,14 +189,12 @@ contract CampaignManagement is CampaignStorage {
      * @dev Sets the campaign status to Open. Can only be called by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function openCampaign(uint256 _campaignId) public onlyHost(_campaignId) {
+    function openCampaign(
+        uint256 _campaignId
+    ) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
-
         if (campaign.status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
-        }
-        if (block.timestamp < campaign.startTime) {
-            revert Web3Campaigns__CampaignStartTimeNotYetStrated();
         }
 
         campaign.status = CampaignStatus.Open;
@@ -194,7 +206,9 @@ contract CampaignManagement is CampaignStorage {
      * This allows claims to begin.
      * @param _campaignId The ID of the campaign.
      */
-    function endCampaign(uint256 _campaignId) public onlyHost(_campaignId) {
+    function endCampaign(
+        uint256 _campaignId
+    ) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Open) {
@@ -213,7 +227,9 @@ contract CampaignManagement is CampaignStorage {
      * @dev Closes the campaign, preventing further claims. Only callable by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function closeCampaign(uint256 _campaignId) public onlyHost(_campaignId) {
+    function closeCampaign(
+        uint256 _campaignId
+    ) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Ended) {

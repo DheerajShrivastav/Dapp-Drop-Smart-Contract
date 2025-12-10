@@ -2,13 +2,21 @@
 pragma solidity ^0.8.20;
 
 import "./CampaignStorage.sol"; // Import the shared storage
+import "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
+import "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 // This contract manages participant actions like completing tasks and claiming rewards.
 contract ParticipantManagement is CampaignStorage {
     // --- Modifiers ---
     // Override the onlyHost modifier from CampaignStorage
-    modifier onlyHost(uint256 _campaignId) override {
-        super.onlyHost(_campaignId); // Call the base implementation
+    modifier onlyHost(uint256 _campaignId) virtual override {
+        if (_campaigns[_campaignId].id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        if (_campaigns[_campaignId].host != msg.sender) {
+            revert Web3Campaigns__CallerIsNotHost();
+        }
+        _;
     }
 
     /**
@@ -18,7 +26,10 @@ contract ParticipantManagement is CampaignStorage {
      * @param _campaignId The ID of the campaign.
      * @param _taskIndex The index of the task within the campaign's tasks array.
      */
-    function completeTask(uint256 _campaignId, uint256 _taskIndex) public {
+    function completeTask(
+        uint256 _campaignId,
+        uint256 _taskIndex
+    ) public virtual campaignTimeValid(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         // Basic checks for campaign and task existence/status
@@ -28,15 +39,24 @@ contract ParticipantManagement is CampaignStorage {
         if (campaign.status != CampaignStatus.Open) {
             revert Web3Campaigns__CampaignNotOpen();
         }
-        if (block.timestamp > campaign.endTime) {
-            revert Web3Campaigns__CampaignEnded();
-        }
         if (_taskIndex >= campaign.tasks.length) {
             revert Web3Campaigns__TaskNotFound();
         }
         if (_participantTaskCompletion[msg.sender][_campaignId][_taskIndex]) {
             revert Web3Campaigns__TaskAlreadyCompleted();
         }
+
+        // SECURITY CHECKS
+        require(
+            _suspiciousActivityScore[msg.sender] < MAX_SUSPICIOUS_SCORE,
+            "Account flagged for suspicious activity"
+        );
+
+        // Anti-spam protection
+        require(
+            block.timestamp - _lastActivityTime[msg.sender] >= 30 seconds,
+            "Too many rapid actions"
+        );
 
         CampaignTask storage currentTask = campaign.tasks[_taskIndex];
 
@@ -92,6 +112,9 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         emit ParticipantTaskCompleted(_campaignId, msg.sender, _taskIndex);
+
+        // Update last activity time
+        _lastActivityTime[msg.sender] = block.timestamp;
     }
 
     /**
@@ -151,7 +174,7 @@ contract ParticipantManagement is CampaignStorage {
      * @dev Allows a participant to claim their reward after completing all required tasks.
      * @param _campaignId The ID of the campaign.
      */
-    function claimReward(uint256 _campaignId) public {
+    function claimReward(uint256 _campaignId) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
 
         // Basic checks for campaign existence and claimability

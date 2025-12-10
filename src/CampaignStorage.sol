@@ -10,6 +10,8 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 abstract contract CampaignStorage is AccessControl {
     // --- Roles ---
     bytes32 public constant HOST_ROLE = keccak256("HOST_ROLE");
+    // Emergency admin role
+    bytes32 public constant EMERGENCY_ADMIN = keccak256("EMERGENCY_ADMIN");
 
     // --- Custom Errors ---
     // Centralized error definitions for consistency and easier management
@@ -41,6 +43,13 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__NotHoldingSpecificERC721(); // For ONCHAIN_HOLD_ERC721 task verification
     error Web3Campaigns__InvalidCampaignDuration(); // For _endTime <= _startTime in campaign creation
 
+    // Security constants
+    uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
+    uint256 public constant MAX_CAMPAIGN_DURATION = 365 days;
+    uint256 public constant MAX_PARTICIPANTS_LIMIT = 100000;
+    uint256 public constant RATE_LIMIT_COOLDOWN = 5 minutes;
+    uint256 public constant JOIN_COOLDOWN = 1 minutes;
+    uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
     // --- Enums ---
     enum CampaignStatus {
         Draft, // Campaign created, host is adding tasks
@@ -56,16 +65,18 @@ abstract contract CampaignStorage is AccessControl {
         SOCIAL_POST, // e.g., Make a post about the campaign
         DISCORD_JOIN, // e.g., Join a Discord server
         WALLET_CONNECT, // Simple wallet connection (often off-chain, or just a record)
+        HUMANITY_VERIFICATION, // e.g., CAPTCHA or other human verification
         ONCHAIN_TX, // Perform a specific on-chain transaction
         ONCHAIN_HOLD_ERC20, // Hold a minimum amount of an ERC-20 token
         ONCHAIN_HOLD_ERC721 // Hold a specific ERC-721 NFT
     }
 
     enum RewardType {
-        NONE, // No on-chain reward (e.g., whitelist spot, off-chain prize)
         ERC20, // ERC-20 token reward
         ERC721_SINGLE, // Single ERC-721 token reward (transfer specific token)
-        ERC721_BATCH // Batch ERC-721 token reward (mint/transfer multiple) - more complex
+        ERC721_BATCH, // Batch ERC-721 token reward (mint/transfer multiple) - more complex
+        OTHER, // No on-chain reward (e.g., whitelist spot, off-chain prize)
+        NONE // No reward
     }
 
     // --- Structs ---
@@ -103,7 +114,13 @@ abstract contract CampaignStorage is AccessControl {
     mapping(address => mapping(uint256 => bool))
         internal _participantClaimedReward;
     mapping(address => uint256[]) internal _hostCampaigns;
-    mapping(address => mapping(uint256 => bool)) internal _hasParticipated; // Tracks if a participant has started a campaign
+    mapping(address => mapping(uint256 => bool)) internal _hasParticipated;
+
+    // Security tracking mappings
+    mapping(address => uint256) internal _lastActivityTime;
+    mapping(address => uint256) internal _userCampaignCount;
+    mapping(address => uint256) internal _suspiciousActivityScore;
+    mapping(address => uint256) internal _lastJoinTime;
 
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
@@ -142,6 +159,13 @@ abstract contract CampaignStorage is AccessControl {
         uint256 amountOrTokenId
     );
 
+    //Events for Security Purposes
+    event EmergencyPause(address indexed admin, uint256 timestamp);
+    event EmergencyUnpause(address indexed admin, uint256 timestamp);
+    event SecurityViolationDetected(address indexed user, string reason);
+    event SuspiciousActivity(address indexed user, string activity);
+    event FundsReceived(address indexed sender, uint256 amount);
+
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {
         if (_campaigns[_campaignId].id == 0) {
@@ -151,5 +175,47 @@ abstract contract CampaignStorage is AccessControl {
             revert Web3Campaigns__CallerIsNotHost();
         }
         _;
+    }
+
+    modifier campaignTimeValid(uint256 _campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        require(
+            block.timestamp >= campaign.startTime &&
+                block.timestamp <= campaign.endTime,
+            "Campaign not in active period"
+        );
+        _;
+    }
+
+    /**
+     * @notice Validate campaign parameters for security
+     */
+    function _validateCampaignParams(
+        uint256 _startTime,
+        uint256 _endTime
+    ) internal view {
+        if (_startTime <= block.timestamp) {
+            revert Web3Campaigns__CampaignStartTimeNotYetStrated();
+        }
+        if (_endTime <= _startTime) {
+            revert Web3Campaigns__InvalidCampaignDuration();
+        }
+        if (_endTime - _startTime < MIN_CAMPAIGN_DURATION) {
+            revert Web3Campaigns__InvalidCampaignDuration();
+        }
+        if (_endTime - _startTime > MAX_CAMPAIGN_DURATION) {
+            revert Web3Campaigns__InvalidCampaignDuration();
+        }
+    }
+
+    /**
+     * @notice Rate limiting check
+     */
+    function _checkRateLimit(address _user) internal {
+        require(
+            block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN,
+            "Rate limit: too many actions"
+        );
+        _lastActivityTime[_user] = block.timestamp;
     }
 }
