@@ -172,26 +172,164 @@ contract ParticipantManagement is CampaignStorage {
 
     /**
      * @dev Allows a participant to claim their reward after completing all required tasks.
+     * Supports ERC20 (fixed/tiered), NFT (bulk from pool), and off-chain rewards.
      * @param _campaignId The ID of the campaign.
      */
     function claimReward(uint256 _campaignId) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
 
-        // Basic checks for campaign existence and claimability
+        // Basic validation
         if (campaign.id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
         if (campaign.status != CampaignStatus.Ended) {
-            revert Web3Campaigns__CampaignNotYetEnded(); // Only claimable after campaign has ended
+            revert Web3Campaigns__CampaignNotYetEnded();
         }
         if (_participantClaimedReward[msg.sender][_campaignId]) {
             revert Web3Campaigns__AlreadyClaimed();
         }
-        if (campaign.reward.rewardType == RewardType.NONE) {
+        if (!campaign.rewardConfig.rewardsConfigured) {
             revert Web3Campaigns__NoRewardSet();
         }
 
         // Verify all required tasks are completed
+        _verifyAllTasksCompleted(_campaignId);
+
+        // Mark as claimed FIRST (Checks-Effects-Interactions pattern)
+        _participantClaimedReward[msg.sender][_campaignId] = true;
+
+        // Assign claim order for tiered distribution
+        campaign.claimCount++;
+        uint256 claimRank = campaign.claimCount;
+        _claimOrder[_campaignId][msg.sender] = claimRank;
+
+        uint256 erc20Amount = 0;
+        uint256 nftCount = 0;
+
+        // Process ERC20 rewards
+        if (campaign.rewardConfig.erc20Reward.enabled) {
+            erc20Amount = _processERC20Reward(_campaignId, claimRank);
+        }
+
+        // Process NFT rewards
+        if (campaign.rewardConfig.nftReward.enabled) {
+            nftCount = _processNFTReward(_campaignId);
+        }
+
+        // Emit appropriate event
+        RewardType claimedType = RewardType.OTHER;
+        address tokenAddr = address(0);
+        uint256 amount = claimRank; // Use claimRank as identifier
+
+        if (campaign.rewardConfig.erc20Reward.enabled) {
+            claimedType = RewardType.ERC20;
+            tokenAddr = campaign.rewardConfig.erc20Reward.tokenAddress;
+            amount = erc20Amount;
+        } else if (campaign.rewardConfig.nftReward.enabled) {
+            claimedType = RewardType.ERC721_BATCH;
+            tokenAddr = campaign.rewardConfig.nftReward.pool.tokenAddress;
+            amount = nftCount;
+        }
+
+        emit RewardClaimed(
+            _campaignId,
+            msg.sender,
+            claimedType,
+            tokenAddr,
+            amount
+        );
+    }
+
+    /**
+     * @dev Process ERC20 reward distribution based on distribution mode
+     * @param _campaignId Campaign ID
+     * @param _claimRank Participant's claim rank
+     * @return amount The amount of tokens transferred
+     */
+    function _processERC20Reward(
+        uint256 _campaignId,
+        uint256 _claimRank
+    ) internal returns (uint256 amount) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        ERC20Reward storage reward = campaign.rewardConfig.erc20Reward;
+
+        if (reward.distributionMode == DistributionMode.FIXED) {
+            amount = reward.fixedAmount;
+        } else if (reward.distributionMode == DistributionMode.TIERED) {
+            // Find applicable tier based on claim rank
+            RewardTier[] storage tiers = _rewardTiers[_campaignId];
+            for (uint256 i = 0; i < tiers.length; i++) {
+                if (_claimRank >= tiers[i].startRank && _claimRank <= tiers[i].endRank) {
+                    amount = tiers[i].amount;
+                    break;
+                }
+            }
+        } else if (reward.distributionMode == DistributionMode.FCFS) {
+            // Take from pool until exhausted
+            if (reward.distributedAmount + reward.fixedAmount <= reward.totalPool) {
+                amount = reward.fixedAmount;
+            }
+        }
+
+        if (amount > 0) {
+            IERC20 token = IERC20(reward.tokenAddress);
+
+            // Check allowance
+            if (token.allowance(campaign.host, address(this)) < amount) {
+                revert Web3Campaigns__InsufficientERC20Allowance();
+            }
+
+            // Transfer tokens from host to participant
+            bool success = token.transferFrom(campaign.host, msg.sender, amount);
+            if (!success) {
+                revert Web3Campaigns__ERC20TransferFailed();
+            }
+
+            reward.distributedAmount += amount;
+        }
+
+        return amount;
+    }
+
+    /**
+     * @dev Process NFT reward distribution from pool
+     * @param _campaignId Campaign ID
+     * @return nftCount Number of NFTs distributed
+     */
+    function _processNFTReward(uint256 _campaignId) internal returns (uint256 nftCount) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        NFTReward storage reward = campaign.rewardConfig.nftReward;
+        NFTPool storage pool = reward.pool;
+
+        // Check if NFTs are available
+        if (pool.distributedCount >= pool.tokenIds.length) {
+            // No more NFTs, but don't revert - participant still gets other rewards
+            return 0;
+        }
+
+        uint256 nftsToDistribute = reward.maxPerParticipant;
+        uint256 available = pool.tokenIds.length - pool.distributedCount;
+        if (nftsToDistribute > available) {
+            nftsToDistribute = available;
+        }
+
+        IERC721 nft = IERC721(pool.tokenAddress);
+
+        for (uint256 i = 0; i < nftsToDistribute; i++) {
+            uint256 tokenId = pool.tokenIds[pool.distributedCount];
+            nft.transferFrom(address(this), msg.sender, tokenId);
+            pool.distributedCount++;
+        }
+
+        return nftsToDistribute;
+    }
+
+    /**
+     * @dev Verify participant has completed all required tasks
+     * @param _campaignId Campaign ID
+     */
+    function _verifyAllTasksCompleted(uint256 _campaignId) internal view {
+        Campaign storage campaign = _campaigns[_campaignId];
         for (uint256 i = 0; i < campaign.tasks.length; i++) {
             if (
                 !campaign.tasks[i].isOptional &&
@@ -200,53 +338,6 @@ contract ParticipantManagement is CampaignStorage {
                 revert Web3Campaigns__AllTasksNotCompleted();
             }
         }
-
-        // Mark as claimed BEFORE transferring reward (Checks-Effects-Interactions)
-        _participantClaimedReward[msg.sender][_campaignId] = true;
-
-        // --- Reward Distribution Logic ---
-        if (campaign.reward.rewardType == RewardType.ERC20) {
-            IERC20 token = IERC20(campaign.reward.tokenAddress);
-            // Check if this contract has enough allowance from the host
-            if (
-                token.allowance(campaign.host, address(this)) <
-                campaign.reward.amountOrTokenId
-            ) {
-                revert Web3Campaigns__InsufficientERC20Allowance();
-            }
-            // Pull tokens from host's approved allowance
-            bool success = token.transferFrom(
-                campaign.host,
-                msg.sender,
-                campaign.reward.amountOrTokenId
-            );
-            if (!success) {
-                revert Web3Campaigns__ERC20TransferFailed();
-            }
-        } else if (campaign.reward.rewardType == RewardType.ERC721_SINGLE) {
-            IERC721 token = IERC721(campaign.reward.tokenAddress);
-            // This contract must own the specific NFT to transfer it
-            // Ensure the contract actually holds the NFT
-            if (
-                token.ownerOf(campaign.reward.amountOrTokenId) != address(this)
-            ) {
-                revert Web3Campaigns__ERC721TransferFailed(); // Contract doesn't own the NFT
-            }
-            token.transferFrom(
-                address(this),
-                msg.sender,
-                campaign.reward.amountOrTokenId
-            );
-            // ERC721 transferFrom reverts on failure, no explicit success check needed here.
-        }
-        // Add more reward types (e.g., Ether, custom NFT minting) as needed
-
-        emit RewardClaimed(
-            _campaignId,
-            msg.sender,
-            campaign.reward.rewardType,
-            campaign.reward.tokenAddress,
-            campaign.reward.amountOrTokenId
-        );
     }
 }
+

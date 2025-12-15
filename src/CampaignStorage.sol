@@ -42,6 +42,18 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__InsufficientERC20Balance(); // For ONCHAIN_HOLD_ERC20 task verification
     error Web3Campaigns__NotHoldingSpecificERC721(); // For ONCHAIN_HOLD_ERC721 task verification
     error Web3Campaigns__InvalidCampaignDuration(); // For _endTime <= _startTime in campaign creation
+    
+    // Flexible Reward System Errors
+    error Web3Campaigns__NFTPoolExhausted();
+    error Web3Campaigns__ERC20PoolExhausted();
+    error Web3Campaigns__InvalidTierConfiguration();
+    error Web3Campaigns__TooManyTiers();
+    error Web3Campaigns__NoNFTsInPool();
+    error Web3Campaigns__MaxNFTsPerParticipantExceeded();
+    error Web3Campaigns__InvalidTokenAddress();
+    error Web3Campaigns__RewardNotConfigured();
+    error Web3Campaigns__NFTRewardNotEnabled();
+    error Web3Campaigns__ERC20RewardNotEnabled();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -79,6 +91,13 @@ abstract contract CampaignStorage is AccessControl {
         NONE // No reward
     }
 
+    // Distribution modes for flexible reward allocation
+    enum DistributionMode {
+        FIXED,  // Same amount to all participants
+        TIERED, // Different amounts based on claim rank
+        FCFS    // First-come-first-served until pool exhausted
+    }
+
     // --- Structs ---
     struct CampaignTask {
         TaskType taskType;
@@ -87,6 +106,54 @@ abstract contract CampaignStorage is AccessControl {
         bool isOptional;
     }
 
+    // Individual reward tier for tiered distribution
+    struct RewardTier {
+        uint256 startRank;  // First rank eligible (1-indexed)
+        uint256 endRank;    // Last rank eligible (inclusive)
+        uint256 amount;     // Amount per participant in this tier
+    }
+
+    // NFT Pool for bulk distribution
+    struct NFTPool {
+        address tokenAddress;
+        uint256[] tokenIds;       // List of NFT token IDs to distribute
+        uint256 distributedCount; // How many have been distributed
+    }
+
+    // ERC20 Reward Configuration
+    struct ERC20Reward {
+        bool enabled;
+        address tokenAddress;
+        DistributionMode distributionMode;
+        uint256 fixedAmount;        // Used if distributionMode == FIXED
+        uint256 totalPool;          // Total tokens available (for FCFS)
+        uint256 distributedAmount;  // Track distributed tokens
+    }
+
+    // NFT Reward Configuration
+    struct NFTReward {
+        bool enabled;
+        DistributionMode distributionMode;
+        NFTPool pool;               // Pool of NFTs to distribute
+        uint256 maxPerParticipant;  // Max NFTs per participant
+    }
+
+    // Off-chain Reward Configuration
+    struct OffChainReward {
+        bool enabled;
+        string rewardDescription;   // Description of off-chain reward
+        bytes rewardMetadata;       // Additional metadata (e.g., JSON)
+    }
+
+    // Complete Campaign Reward Configuration
+    struct CampaignRewardConfig {
+        ERC20Reward erc20Reward;
+        NFTReward nftReward;
+        OffChainReward offChainReward;
+        bool rewardsConfigured;     // Flag to check if rewards are set
+    }
+
+    // Legacy struct kept for backward compatibility in events
     struct CampaignReward {
         RewardType rewardType;
         address tokenAddress;
@@ -101,9 +168,10 @@ abstract contract CampaignStorage is AccessControl {
         uint256 endTime;
         CampaignStatus status;
         CampaignTask[] tasks;
-        CampaignReward reward;
-        uint224 createdAt; // Using uint224 for timestamps to potentially save gas/storage space
+        CampaignRewardConfig rewardConfig;
+        uint224 createdAt;
         uint256 totalParticipants;
+        uint256 claimCount;  // Track claim order for tiered distribution
     }
 
     // --- State Variables (Internal to be accessible by inheriting contracts) ---
@@ -121,6 +189,10 @@ abstract contract CampaignStorage is AccessControl {
     mapping(address => uint256) internal _userCampaignCount;
     mapping(address => uint256) internal _suspiciousActivityScore;
     mapping(address => uint256) internal _lastJoinTime;
+
+    // Reward system state variables
+    mapping(uint256 => mapping(address => uint256)) internal _claimOrder; // campaignId => participant => claimRank
+    mapping(uint256 => RewardTier[]) internal _rewardTiers; // campaignId => tiers array
 
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
@@ -165,6 +237,31 @@ abstract contract CampaignStorage is AccessControl {
     event SecurityViolationDetected(address indexed user, string reason);
     event SuspiciousActivity(address indexed user, string activity);
     event FundsReceived(address indexed sender, uint256 amount);
+
+    // Flexible Reward System Events
+    event ERC20RewardConfigured(
+        uint256 indexed campaignId,
+        address indexed tokenAddress,
+        DistributionMode mode,
+        uint256 amount
+    );
+    event NFTRewardConfigured(
+        uint256 indexed campaignId,
+        address indexed tokenAddress,
+        uint256 maxPerParticipant
+    );
+    event OffChainRewardConfigured(
+        uint256 indexed campaignId,
+        string description
+    );
+    event NFTsAddedToPool(
+        uint256 indexed campaignId,
+        uint256 tokenCount
+    );
+    event TieredRewardConfigured(
+        uint256 indexed campaignId,
+        uint256 tierCount
+    );
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {

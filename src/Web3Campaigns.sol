@@ -15,7 +15,7 @@ contract Web3Campaigns is
     Pausable
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.0.3";
+    string public constant VERSION = "0.1.0";
 
     constructor() {
         // Grant emergency admin role to deployer
