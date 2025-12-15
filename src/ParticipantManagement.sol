@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.31;
 
 import "./CampaignStorage.sol"; // Import the shared storage
 import "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
@@ -11,10 +11,10 @@ contract ParticipantManagement is CampaignStorage {
     // Override the onlyHost modifier from CampaignStorage
     modifier onlyHost(uint256 _campaignId) virtual override {
         if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
+            revert Web3Campaigns__CampaignNotFound(_campaignId);
         }
         if (_campaigns[_campaignId].host != msg.sender) {
-            revert Web3Campaigns__CallerIsNotHost();
+            revert Web3Campaigns__CallerIsNotHost(_campaignId, msg.sender, _campaigns[_campaignId].host);
         }
         _;
     }

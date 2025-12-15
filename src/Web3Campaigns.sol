@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.31;
 
 import "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
@@ -15,7 +15,7 @@ contract Web3Campaigns is
     Pausable
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.1.0";
+    string public constant VERSION = "0.2.0";
 
     constructor() {
         // Grant emergency admin role to deployer
@@ -45,10 +45,10 @@ contract Web3Campaigns is
         override(CampaignManagement, ParticipantManagement, CampaignStorage) {
         require(!paused(), "Contract is paused");
         if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
+            revert Web3Campaigns__CampaignNotFound(_campaignId);
         }
         if (_campaigns[_campaignId].host != msg.sender) {
-            revert Web3Campaigns__CallerIsNotHost();
+            revert Web3Campaigns__CallerIsNotHost(_campaignId, msg.sender, _campaigns[_campaignId].host);
         }
         _;
     }
