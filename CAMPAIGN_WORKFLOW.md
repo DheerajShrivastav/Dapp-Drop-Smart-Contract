@@ -185,7 +185,11 @@ mindmap
 
 ---
 
-### 3️⃣ Setting Rewards Flow
+### 3️⃣ Setting Rewards Flow (Flexible Reward System v0.1.0)
+
+The flexible reward system supports multiple reward types per campaign with different distribution modes.
+
+#### ERC20 Fixed Distribution
 
 ```mermaid
 sequenceDiagram
@@ -193,26 +197,76 @@ sequenceDiagram
     participant Contract as Web3Campaigns
     participant Campaign
 
-    Host->>Contract: setCampaignReward(campaignId, rewardType, tokenAddress, amountOrTokenId)
+    Host->>Contract: setERC20RewardFixed(campaignId, tokenAddress, amountPerParticipant)
     
     Note over Contract: Verify caller is host
     Note over Contract: Check campaign is Draft
-    Note over Contract: Check reward not already set
+    Note over Contract: Validate token address
     
-    Contract->>Campaign: Set CampaignReward
-    Contract-->>Host: Emit RewardSet event
+    Contract->>Campaign: Set ERC20Reward (FIXED mode)
+    Contract-->>Host: Emit ERC20RewardConfigured event
 ```
 
-**Reward Types:**
+#### ERC20 Tiered Distribution
 
-| Type | Token Address | Amount/TokenId | Notes |
-|------|---------------|----------------|-------|
-| `ERC20` | ERC-20 contract | Amount per participant | Host must approve tokens |
-| `ERC721_SINGLE` | ERC-721 contract | Specific token ID | Contract must hold NFT |
-| `ERC721_BATCH` | ERC-721 contract | Variable | Complex minting logic |
-| `OTHER` | `address(0)` | 0 | Off-chain rewards (whitelist, etc.) |
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Contract as Web3Campaigns
+    participant Campaign
+
+    Host->>Contract: setERC20RewardTiered(campaignId, tokenAddress, startRanks[], endRanks[], amounts[])
+    
+    Note over Contract: Example tiers:
+    Note over Contract: Rank 1-10: 100 tokens
+    Note over Contract: Rank 11-50: 50 tokens
+    Note over Contract: Rank 51+: 10 tokens
+    
+    Contract->>Campaign: Set ERC20Reward (TIERED mode)
+    Contract->>Campaign: Store RewardTiers
+    Contract-->>Host: Emit TieredRewardConfigured event
+```
+
+#### NFT Bulk Distribution
+
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Contract as Web3Campaigns
+    participant NFTContract as ERC721
+
+    Host->>Contract: setNFTReward(campaignId, nftAddress, maxPerParticipant)
+    Contract-->>Host: Emit NFTRewardConfigured
+    
+    Host->>NFTContract: approve(contractAddress, tokenIds)
+    Host->>Contract: addNFTsToPool(campaignId, tokenIds[])
+    Contract->>NFTContract: transferFrom(host, contract, tokenId) per NFT
+    Contract-->>Host: Emit NFTsAddedToPool
+```
+
+**Distribution Modes:**
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `FIXED` | Same amount to all participants | 20 tokens to everyone |
+| `TIERED` | Different amounts based on claim rank | First 10 get 100, next 40 get 50 |
+| `FCFS` | First-come-first-served until exhausted | Limited pool of NFTs |
+
+**Reward Configuration Functions:**
+
+| Function | Purpose | Parameters |
+|----------|---------|------------|
+| `setERC20RewardFixed()` | Fixed token per participant | campaignId, tokenAddress, amount |
+| `setERC20RewardTiered()` | Tiered based on claim order | campaignId, tokenAddress, startRanks[], endRanks[], amounts[] |
+| `setNFTReward()` | Configure NFT distribution | campaignId, nftAddress, maxPerParticipant |
+| `addNFTsToPool()` | Add NFTs to pool (bulk) | campaignId, tokenIds[] |
+| `setOffChainReward()` | Whitelist/off-chain prizes | campaignId, description, metadata |
+
+**Combined Rewards:**
+You can configure multiple reward types for the same campaign (e.g., ERC20 + NFT + off-chain).
 
 ---
+
 
 ### 4️⃣ Campaign Activation Flow
 
@@ -528,7 +582,13 @@ forge create ./src/Web3Campaigns.sol:Web3Campaigns \
 1. `grantHostRole(address)` - Grant HOST_ROLE
 2. `createCampaign(name, startTime, endTime)` - Create new campaign
 3. `addTaskToCampaign(id, type, desc, data, optional)` - Add task
-4. `setCampaignReward(id, type, token, amount)` - Set reward
+4. **Reward Configuration (v0.1.0):**
+   - `setERC20RewardFixed(id, token, amount)` - Fixed ERC20 per participant
+   - `setERC20RewardTiered(id, token, startRanks[], endRanks[], amounts[])` - Tiered rewards
+   - `setNFTReward(id, nftAddress, maxPerParticipant)` - Configure NFT distribution
+   - `addNFTsToPool(id, tokenIds[])` - Add NFTs to distribution pool
+   - `setOffChainReward(id, description, metadata)` - Off-chain rewards
+   - `setCampaignReward(id, type, token, amount)` - Legacy (deprecated)
 5. `openCampaign(id)` - Activate campaign
 6. `verifyTaskCompletion(id, participant, taskIndex)` - Verify off-chain task
 7. `endCampaign(id)` - End campaign
@@ -538,7 +598,17 @@ forge create ./src/Web3Campaigns.sol:Web3Campaigns \
 1. `completeTask(campaignId, taskIndex)` - Complete a task
 2. `claimReward(campaignId)` - Claim reward after completing tasks
 
+### View Functions (Rewards)
+1. `getERC20RewardConfig(campaignId)` - Get ERC20 reward details
+2. `getNFTRewardConfig(campaignId)` - Get NFT reward details
+3. `getOffChainRewardConfig(campaignId)` - Get off-chain reward details
+4. `getClaimRank(campaignId, participant)` - Get participant's claim order
+5. `getRewardTiers(campaignId)` - Get tiered distribution config
+6. `calculatePotentialReward(campaignId)` - Calculate expected rewards
+7. `getNFTPoolStatus(campaignId)` - Get NFT pool availability
+
 ### Admin Actions
 1. `emergencyPause()` - Pause contract
 2. `emergencyUnpause()` - Unpause contract
 3. `revokeHostRole(address)` - Revoke HOST_ROLE
+
