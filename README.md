@@ -18,6 +18,8 @@ The smart contract system uses a modular design with several key components:
 
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) for building and testing
 - Solidity ^0.8.20
+- [Slither](https://github.com/crytic/slither) — static analysis
+- [Aderyn](https://github.com/Cyfrin/aderyn) — security analysis
 
 ### Setup
 
@@ -28,7 +30,13 @@ cd DappDrop/smart-contract
 
 # Install dependencies
 forge install
+
+# Install security tools
+make install-security-tools
 ```
+
+**Using the devcontainer (recommended):**  
+Open this project in VS Code and select **"Reopen in Container"** — this gives you a sandboxed environment with all tools pre-installed. See [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json).
 
 ### Build
 
@@ -42,11 +50,47 @@ forge build
 forge test
 ```
 
+### Security Analysis
+
+> Reference: [How to Not Accidentally Shoot Yourself in the Foot with AI Development](https://www.cyfrin.io/blog/how-to-not-accidentally-shoot-yourself-in-the-foot-with-ai-development)
+
+Run static analysis and security scanning before every commit:
+
+```bash
+# Run Slither static analysis (filters out library findings)
+make slither
+
+# Run Aderyn security analysis
+make aderyn
+
+# Run all security tools at once
+make audit
+```
+
+### AI-Assisted Development Safety
+
+This project includes guardrails for safe AI-assisted development:
+
+| Layer | What | File |
+|-------|------|------|
+| AI Rules | Security-focused prompts & constraints for AI code generation | [CLAUDE.md](CLAUDE.md) |
+| Static Analysis | Slither config scoped to `src/`, excludes libraries | [slither.config.json](slither.config.json) |
+| Sandboxed Env | Devcontainer with all tools pre-installed | [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json) |
+| Automation | Makefile targets for build, test, and audit | [Makefile](Makefile) |
+
+**Key practices (from the Cyfrin article):**
+
+1. **Never expose secrets** — use `forge script --account <keystore>` for deploys, never raw private keys
+2. **Review every AI-generated diff** — you are the developer and the security researcher
+3. **Run `make audit` before committing** — catch issues before they reach the repo
+4. **Verify dependencies** — don't blindly install AI-suggested packages
+5. **Use the devcontainer** — sandboxes AI tool access, limits blast radius
+
 ### Deploy
 
 ```bash
-# Deploy to a testnet
-forge create ./src/Web3Campaigns.sol:Web3Campaigns --rpc-url <your-rpc-url> --account <your-account> --verify --etherscan-api-key <your-key> --broadcast
+# Deploy to Sepolia (uses keystore account — never paste private keys)
+make deploy-sepolia
 ```
 
 ## Contract Functionality

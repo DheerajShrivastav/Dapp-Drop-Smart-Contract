@@ -1,0 +1,22 @@
+{
+  "name": "DappDrop Smart Contract Dev",
+  "image": "ghcr.io/cyfrin/devcontainer:latest",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/rust:1": {}
+  },
+  "postCreateCommand": "forge install && pip3 install slither-analyzer && cargo install aderyn",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "NomicFoundation.hardhat-solidity",
+        "JuanBlanco.solidity"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "FOUNDRY_PROFILE": "default"
+  }
+}
