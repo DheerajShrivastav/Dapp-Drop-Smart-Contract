@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "solidity": {
+      "source": "cyfrin/solskill",
+      "sourceType": "github",
+      "computedHash": "4b7dc0a44669bdbd7112eee1381c675e5cb204902c92ff6b901bdaa283b5c371"
+    }
+  }
+}

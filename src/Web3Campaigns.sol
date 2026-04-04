@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.31;
 
-import "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
-import "./CampaignManagement.sol";
-import "./ParticipantManagement.sol";
-import "./CampaignViewFunctions.sol";
+import {ReentrancyGuard} from "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
+import {CampaignStorage} from "./CampaignStorage.sol";
+import {CampaignManagement} from "./CampaignManagement.sol";
+import {ParticipantManagement} from "./ParticipantManagement.sol";
+import {CampaignViewFunctions} from "./CampaignViewFunctions.sol";
 
 contract Web3Campaigns is
     CampaignManagement,
@@ -45,10 +46,10 @@ contract Web3Campaigns is
         override(CampaignManagement, ParticipantManagement, CampaignStorage) {
         require(!paused(), "Contract is paused");
         if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound(_campaignId);
+            revert Web3Campaigns__CampaignNotFound();
         }
         if (_campaigns[_campaignId].host != msg.sender) {
-            revert Web3Campaigns__CallerIsNotHost(_campaignId, msg.sender, _campaigns[_campaignId].host);
+            revert Web3Campaigns__CallerIsNotHost();
         }
         _;
     }
@@ -68,13 +69,31 @@ contract Web3Campaigns is
         _;
     }
 
-    // Enhanced receive function with security
+    /**
+     * @notice Withdraw ETH from the contract to prevent locked ether
+     */
+    function withdrawETH(address payable _to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (_to == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        uint256 balance = address(this).balance;
+        if (balance == 0) {
+            revert Web3Campaigns__TransferFailed();
+        }
+
+        emit EtherWithdrawn(_to, balance);
+
+        (bool success, ) = _to.call{value: balance}("");
+        if (!success) {
+            revert Web3Campaigns__TransferFailed();
+        }
+    }
+
     receive() external payable whenNotPaused nonReentrant {
         require(msg.value > 0, "Invalid ETH amount");
         emit FundsReceived(msg.sender, msg.value);
     }
 
-    // Enhanced fallback
     fallback() external payable whenNotPaused {
         revert("Function does not exist");
     }

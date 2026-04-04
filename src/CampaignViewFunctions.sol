@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.31;
 
-import "./CampaignStorage.sol"; // Import the shared storage
+import {CampaignStorage} from "./CampaignStorage.sol";
 
 // This contract provides all the view (read-only) functions for the system.
 contract CampaignViewFunctions is CampaignStorage {

@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.31;
 
-import "./CampaignStorage.sol"; // Import the shared storage
-import "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
-import "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {CampaignStorage} from "./CampaignStorage.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // This contract manages participant actions like completing tasks and claiming rewards.
 contract ParticipantManagement is CampaignStorage {
+    using SafeERC20 for IERC20;
     // --- Modifiers ---
     // Override the onlyHost modifier from CampaignStorage
     modifier onlyHost(uint256 _campaignId) virtual override {
         if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound(_campaignId);
+            revert Web3Campaigns__CampaignNotFound();
         }
         if (_campaigns[_campaignId].host != msg.sender) {
-            revert Web3Campaigns__CallerIsNotHost(_campaignId, msg.sender, _campaigns[_campaignId].host);
+            revert Web3Campaigns__CallerIsNotHost();
         }
         _;
     }
@@ -171,6 +173,68 @@ contract ParticipantManagement is CampaignStorage {
     }
 
     /**
+     * @notice Verify task completion for multiple participants in a single transaction
+     * @param _campaignId The ID of the campaign
+     * @param _participants Array of participant addresses
+     * @param _taskIndices Array of task indices to verify for each participant
+     */
+    function batchVerifyTaskCompletion(
+        uint256 _campaignId,
+        address[] calldata _participants,
+        uint256[] calldata _taskIndices
+    ) external onlyHost(_campaignId) {
+        uint256 length = _participants.length;
+        if (length == 0 || length > MAX_BATCH_SIZE) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (_taskIndices.length != length) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (
+            campaign.status != CampaignStatus.Open &&
+            campaign.status != CampaignStatus.Ended
+        ) {
+            revert Web3Campaigns__CampaignNotOpen();
+        }
+
+        for (uint256 i; i < length; ++i) {
+            uint256 taskIndex = _taskIndices[i];
+            address participant = _participants[i];
+
+            if (taskIndex >= campaign.tasks.length) {
+                revert Web3Campaigns__TaskNotFound();
+            }
+            // Skip on-chain verifiable tasks
+            TaskType tType = campaign.tasks[taskIndex].taskType;
+            if (
+                tType == TaskType.ONCHAIN_TX ||
+                tType == TaskType.ONCHAIN_HOLD_ERC20 ||
+                tType == TaskType.ONCHAIN_HOLD_ERC721
+            ) {
+                revert Web3Campaigns__TaskNotVerifiableByHost();
+            }
+            // Skip already completed
+            if (_participantTaskCompletion[participant][_campaignId][taskIndex]) {
+                continue;
+            }
+
+            _participantTaskCompletion[participant][_campaignId][taskIndex] = true;
+
+            if (!_hasParticipated[participant][_campaignId]) {
+                _hasParticipated[participant][_campaignId] = true;
+                campaign.totalParticipants++;
+            }
+
+            emit ParticipantTaskCompleted(_campaignId, participant, taskIndex);
+        }
+
+        emit BatchTasksVerified(_campaignId, length);
+    }
+
+    /**
      * @dev Allows a participant to claim their reward after completing all required tasks.
      * Supports ERC20 (fixed/tiered), NFT (bulk from pool), and off-chain rewards.
      * @param _campaignId The ID of the campaign.
@@ -272,20 +336,11 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         if (amount > 0) {
-            IERC20 token = IERC20(reward.tokenAddress);
-
-            // Check allowance
-            if (token.allowance(campaign.host, address(this)) < amount) {
-                revert Web3Campaigns__InsufficientERC20Allowance();
-            }
-
-            // Transfer tokens from host to participant
-            bool success = token.transferFrom(campaign.host, msg.sender, amount);
-            if (!success) {
-                revert Web3Campaigns__ERC20TransferFailed();
-            }
-
+            // Update state before external call (CEI pattern)
             reward.distributedAmount += amount;
+
+            // SafeERC20 handles allowance check and reverts on failure
+            IERC20(reward.tokenAddress).safeTransferFrom(campaign.host, msg.sender, amount);
         }
 
         return amount;

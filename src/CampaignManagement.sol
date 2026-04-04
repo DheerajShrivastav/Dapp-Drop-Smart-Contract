@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.31;
 
-import "./CampaignStorage.sol"; // Import the shared storage
+import {CampaignStorage} from "./CampaignStorage.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 // This contract manages campaign creation, task addition, reward setting,
 // and campaign status updates. It also handles host role management.
@@ -10,10 +11,10 @@ contract CampaignManagement is CampaignStorage {
     // Override the onlyHost modifier from CampaignStorage
     modifier onlyHost(uint256 _campaignId) virtual override {
         if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound(_campaignId);
+            revert Web3Campaigns__CampaignNotFound();
         }
         if (_campaigns[_campaignId].host != msg.sender) {
-            revert Web3Campaigns__CallerIsNotHost(_campaignId, msg.sender, _campaigns[_campaignId].host);
+            revert Web3Campaigns__CallerIsNotHost();
         }
         _;
     }
@@ -145,6 +146,67 @@ contract CampaignManagement is CampaignStorage {
         );
     }
 
+    /**
+     * @notice Add multiple tasks to a campaign in a single transaction
+     * @param _campaignId The ID of the campaign
+     * @param _taskTypes Array of task types
+     * @param _descriptions Array of task descriptions
+     * @param _verificationData Array of verification data
+     * @param _isOptional Array of optional flags
+     */
+    function batchAddTasks(
+        uint256 _campaignId,
+        TaskType[] calldata _taskTypes,
+        string[] calldata _descriptions,
+        bytes[] calldata _verificationData,
+        bool[] calldata _isOptional
+    ) external onlyHost(_campaignId) {
+        uint256 length = _taskTypes.length;
+        if (length == 0 || length > MAX_BATCH_SIZE) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (
+            _descriptions.length != length ||
+            _verificationData.length != length ||
+            _isOptional.length != length
+        ) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Draft) {
+            revert Web3Campaigns__CampaignAlreadyStarted();
+        }
+        require(campaign.tasks.length + length <= 20, "Too many tasks per campaign");
+
+        for (uint256 i; i < length; ++i) {
+            require(
+                bytes(_descriptions[i]).length > 0 &&
+                    bytes(_descriptions[i]).length <= 1000,
+                "Invalid description length"
+            );
+
+            campaign.tasks.push(
+                CampaignTask({
+                    taskType: _taskTypes[i],
+                    description: _descriptions[i],
+                    verificationData: _verificationData[i],
+                    isOptional: _isOptional[i]
+                })
+            );
+
+            emit TaskAddedToCampaign(
+                _campaignId,
+                campaign.tasks.length - 1,
+                _taskTypes[i],
+                _descriptions[i]
+            );
+        }
+
+        emit BatchTasksAdded(_campaignId, length);
+    }
+
     // ============================================
     // FLEXIBLE REWARD CONFIGURATION FUNCTIONS
     // ============================================
@@ -184,6 +246,51 @@ contract CampaignManagement is CampaignStorage {
             _tokenAddress,
             DistributionMode.FIXED,
             _amountPerParticipant
+        );
+    }
+
+    /**
+     * @notice Configure ERC20 token reward with first-come-first-served distribution
+     * @dev Participants claim amountPerClaim from a totalPool until it is exhausted
+     * @param _campaignId Campaign ID
+     * @param _tokenAddress ERC20 token contract address
+     * @param _amountPerClaim Amount each participant receives per claim
+     * @param _totalPool Total token pool available for distribution
+     */
+    function setERC20RewardFCFS(
+        uint256 _campaignId,
+        address _tokenAddress,
+        uint256 _amountPerClaim,
+        uint256 _totalPool
+    ) public onlyHost(_campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Draft) {
+            revert Web3Campaigns__CampaignAlreadyStarted();
+        }
+        if (_tokenAddress == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        if (_amountPerClaim == 0 || _totalPool == 0) {
+            revert Web3Campaigns__InvalidRewardAmount();
+        }
+        if (_amountPerClaim > _totalPool) {
+            revert Web3Campaigns__InvalidRewardAmount();
+        }
+
+        campaign.rewardConfig.erc20Reward.enabled = true;
+        campaign.rewardConfig.erc20Reward.tokenAddress = _tokenAddress;
+        campaign.rewardConfig.erc20Reward.distributionMode = DistributionMode.FCFS;
+        campaign.rewardConfig.erc20Reward.fixedAmount = _amountPerClaim;
+        campaign.rewardConfig.erc20Reward.totalPool = _totalPool;
+        campaign.rewardConfig.erc20Reward.distributedAmount = 0;
+        campaign.rewardConfig.rewardsConfigured = true;
+
+        emit ERC20RewardConfigured(
+            _campaignId,
+            _tokenAddress,
+            DistributionMode.FCFS,
+            _totalPool
         );
     }
 
@@ -316,15 +423,18 @@ contract CampaignManagement is CampaignStorage {
         }
         require(_tokenIds.length <= 100, "Too many NFTs at once (max 100)");
 
-        IERC721 nft = IERC721(campaign.rewardConfig.nftReward.pool.tokenAddress);
-        
-        for (uint256 i = 0; i < _tokenIds.length; i++) {
-            // Transfer NFT from host to contract
-            nft.transferFrom(msg.sender, address(this), _tokenIds[i]);
+        // Effects: update state before external calls (CEI pattern)
+        for (uint256 i; i < _tokenIds.length; ++i) {
             campaign.rewardConfig.nftReward.pool.tokenIds.push(_tokenIds[i]);
         }
 
         emit NFTsAddedToPool(_campaignId, _tokenIds.length);
+
+        // Interactions: external transfers after all state changes
+        IERC721 nft = IERC721(campaign.rewardConfig.nftReward.pool.tokenAddress);
+        for (uint256 i; i < _tokenIds.length; ++i) {
+            nft.transferFrom(msg.sender, address(this), _tokenIds[i]);
+        }
     }
 
     /**
@@ -336,8 +446,8 @@ contract CampaignManagement is CampaignStorage {
      */
     function setOffChainReward(
         uint256 _campaignId,
-        string calldata _description,
-        bytes calldata _metadata
+        string memory _description,
+        bytes memory _metadata
     ) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
         
@@ -356,8 +466,8 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @dev Legacy function for backward compatibility - sets ERC20 fixed reward
-     * @deprecated Use setERC20RewardFixed, setERC20RewardTiered, setNFTReward instead
+     * @dev Legacy function for backward compatibility - sets ERC20 fixed reward.
+     * Use setERC20RewardFixed, setERC20RewardTiered, setNFTReward instead.
      */
     function setCampaignReward(
         uint256 _campaignId,
