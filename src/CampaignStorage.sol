@@ -46,7 +46,7 @@ abstract contract CampaignStorage is AccessControl {
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
     uint256 public constant MAX_CAMPAIGN_DURATION = 365 days;
-    uint256 public constant MAX_PARTICIPANTS_LIMIT = 100000;
+    uint256 public constant MAX_PARTICIPANTS_LIMIT = 100_000;
     uint256 public constant RATE_LIMIT_COOLDOWN = 5 minutes;
     uint256 public constant JOIN_COOLDOWN = 1 minutes;
     uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
@@ -60,13 +60,14 @@ abstract contract CampaignStorage is AccessControl {
 
     enum TaskType {
         SOCIAL_FOLLOW, // e.g., Follow Twitter, Instagram
-        SOCIAL_LIKE, // e.g., Like a tweet, post
-        SOCIAL_RETWEET, // e.g., Retweet a tweet
-        SOCIAL_POST, // e.g., Make a post about the campaign
-        DISCORD_JOIN, // e.g., Join a Discord server
-        WALLET_CONNECT, // Simple wallet connection (often off-chain, or just a record)
-        HUMANITY_VERIFICATION, // e.g., CAPTCHA or other human verification
+        JOIN_DISCORD, // e.g., Join a Discord server
+        JOIN_TELEGRAM, // e.g., Join a Telegram group
+        SOCIAL_REPOST, // e.g., Retweet a tweet
         ONCHAIN_TX, // Perform a specific on-chain transaction
+        HUMANITY_VERIFICATION, // e.g., CAPTCHA or other human verification
+        SOCIAL_LIKE, // e.g., Like a tweet, post
+        SOCIAL_POST, // e.g., Make a post about the campaign
+        WALLET_CONNECT, // Simple wallet connection (often off-chain, or just a record)
         ONCHAIN_HOLD_ERC20, // Hold a minimum amount of an ERC-20 token
         ONCHAIN_HOLD_ERC721 // Hold a specific ERC-721 NFT
     }
@@ -74,9 +75,9 @@ abstract contract CampaignStorage is AccessControl {
     enum RewardType {
         ERC20, // ERC-20 token reward
         ERC721_SINGLE, // Single ERC-721 token reward (transfer specific token)
+        NONE // No reward
         ERC721_BATCH, // Batch ERC-721 token reward (mint/transfer multiple) - more complex
         OTHER, // No on-chain reward (e.g., whitelist spot, off-chain prize)
-        NONE // No reward
     }
 
     // --- Structs ---

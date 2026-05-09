@@ -107,6 +107,10 @@ contract ParticipantManagement is CampaignStorage {
 
         // Accurately track unique participants
         if (!_hasParticipated[msg.sender][_campaignId]) {
+            require(
+                campaign.totalParticipants < MAX_PARTICIPANTS,
+                "Campaign participant limit reached"
+            );
             _hasParticipated[msg.sender][_campaignId] = true;
             campaign.totalParticipants++; // Increment only for the first task completed by this participant in this campaign
         }
@@ -163,6 +167,10 @@ contract ParticipantManagement is CampaignStorage {
 
         // Accurately track unique participants
         if (!_hasParticipated[_participant][_campaignId]) {
+            require(
+                campaign.totalParticipants < MAX_PARTICIPANTS,
+                "Campaign participant limit reached"
+            );
             _hasParticipated[_participant][_campaignId] = true;
             campaign.totalParticipants++; // Increment only for the first task completed by this participant in this campaign
         }

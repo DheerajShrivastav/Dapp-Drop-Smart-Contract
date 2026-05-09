@@ -80,7 +80,7 @@ contract CampaignManagement is CampaignStorage {
             endTime: _endTime,
             status: CampaignStatus.Draft,
             tasks: new CampaignTask[](0),
-            reward: CampaignReward(RewardType.NONER, address(0), 0),
+            reward: CampaignReward(RewardType.NONE, address(0), 0),
             createdAt: uint224(block.timestamp), // Cast to uint224
             totalParticipants: 0
         });
@@ -166,6 +166,10 @@ contract CampaignManagement is CampaignStorage {
         }
         if (campaign.reward.rewardType != RewardType.NONE) {
             revert Web3Campaigns__RewardAlreadySet();
+        }
+        if(_rewardType == RewardType.ERC20 || _rewardType == RewardType.ERC721_SINGLE || _rewardType == RewardType.ERC721_BATCH){
+            require(_tokenAddress != address(0), "Invalid token address");
+            require(_tokenAddress.code.length > 0, "Token address has no code");
         }
         if (_rewardType == RewardType.NONE && _amountOrTokenId != 0) {
             revert Web3Campaigns__InvalidRewardAmount();
