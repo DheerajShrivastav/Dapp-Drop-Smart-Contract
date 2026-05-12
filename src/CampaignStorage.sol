@@ -46,7 +46,7 @@ abstract contract CampaignStorage is AccessControl {
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
     uint256 public constant MAX_CAMPAIGN_DURATION = 365 days;
-    uint256 public constant MAX_PARTICIPANTS_LIMIT = 100_000;
+    uint256 public constant MAX_PARTICIPANTS = 100_000;
     uint256 public constant RATE_LIMIT_COOLDOWN = 5 minutes;
     uint256 public constant JOIN_COOLDOWN = 1 minutes;
     uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
@@ -75,9 +75,9 @@ abstract contract CampaignStorage is AccessControl {
     enum RewardType {
         ERC20, // ERC-20 token reward
         ERC721_SINGLE, // Single ERC-721 token reward (transfer specific token)
-        NONE // No reward
+        NONE, // No reward
         ERC721_BATCH, // Batch ERC-721 token reward (mint/transfer multiple) - more complex
-        OTHER, // No on-chain reward (e.g., whitelist spot, off-chain prize)
+        OTHER // No on-chain reward (e.g., whitelist spot, off-chain prize)
     }
 
     // --- Structs ---
