@@ -94,6 +94,34 @@ contract Web3Campaigns is
         super.closeCampaign(_campaignId);
     }
 
+    // Secure wrapper for CampaignManagement.createCampaignWithTasksAndReward
+    function createCampaignWithTasksAndReward(
+        string memory _name,
+        uint256 _startTime,
+        uint256 _endTime,
+        TaskType[] calldata _taskTypes,
+        string[] calldata _descriptions,
+        bytes[] calldata _verificationData,
+        bool[] calldata _isOptional,
+        RewardType _rewardType,
+        address _tokenAddress,
+        uint256 _amountOrTokenId
+    ) external override whenNotPaused nonReentrant returns (uint256) {
+        return
+            super.createCampaignWithTasksAndReward(
+                _name,
+                _startTime,
+                _endTime,
+                _taskTypes,
+                _descriptions,
+                _verificationData,
+                _isOptional,
+                _rewardType,
+                _tokenAddress,
+                _amountOrTokenId
+            );
+    }
+
     // Secure wrapper for ParticipantManagement.completeTask
     function completeTask(
         uint256 _campaignId,

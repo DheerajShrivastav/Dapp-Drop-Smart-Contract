@@ -99,6 +99,62 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
+     * @dev Creates a campaign, adds tasks, and sets a reward in a single call.
+     * @param _name The name of the campaign.
+     * @param _startTime The timestamp when the campaign officially starts.
+     * @param _endTime The timestamp when the campaign officially ends.
+     * @param _taskTypes The task types for the campaign.
+     * @param _descriptions Descriptions for each task.
+     * @param _verificationData Verification data for each task.
+     * @param _isOptional Flags for optional tasks.
+     * @param _rewardType The reward type.
+     * @param _tokenAddress The reward token address (if applicable).
+     * @param _amountOrTokenId The reward amount or token ID.
+     * @return The ID of the newly created campaign.
+     */
+    function createCampaignWithTasksAndReward(
+        string memory _name,
+        uint256 _startTime,
+        uint256 _endTime,
+        TaskType[] calldata _taskTypes,
+        string[] calldata _descriptions,
+        bytes[] calldata _verificationData,
+        bool[] calldata _isOptional,
+        RewardType _rewardType,
+        address _tokenAddress,
+        uint256 _amountOrTokenId
+    ) external virtual returns (uint256) {
+        if (
+            _taskTypes.length != _descriptions.length ||
+            _taskTypes.length != _verificationData.length ||
+            _taskTypes.length != _isOptional.length
+        ) {
+            revert("Array length mismatch");
+        }
+
+        uint256 campaignId = createCampaign(_name, _startTime, _endTime);
+
+        for (uint256 i = 0; i < _taskTypes.length; i++) {
+            addTaskToCampaign(
+                campaignId,
+                _taskTypes[i],
+                _descriptions[i],
+                _verificationData[i],
+                _isOptional[i]
+            );
+        }
+
+        setCampaignReward(
+            campaignId,
+            _rewardType,
+            _tokenAddress,
+            _amountOrTokenId
+        );
+
+        return campaignId;
+    }
+
+    /**
      * @dev Adds a task to an existing campaign. Can only be called by the campaign host in Draft status.
      * @param _campaignId The ID of the campaign.
      * @param _taskType The type of task (e.g., SOCIAL_FOLLOW).

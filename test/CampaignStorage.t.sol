@@ -13,7 +13,6 @@ import {Web3Campaigns} from "../src/Web3Campaigns.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {ERC721ConsecutiveMock} from "@openzeppelin/contracts/mocks/token/ERC721ConsecutiveMock.sol";
 
-
 // Define the test contract
 contract CampaignLifecycleTest is Test {
     // The main contract instance
@@ -127,6 +126,131 @@ contract CampaignLifecycleTest is Test {
             "Invalid Campaign 2",
             getTimestamp() + 100,
             getTimestamp() + 50
+        );
+        vm.stopPrank();
+    }
+
+    function test_CreateCampaignWithTasksAndReward_Success() public {
+        uint256 startTime = getTimestamp() + 100;
+        uint256 endTime = getTimestamp() + 200;
+
+        Web3Campaigns.TaskType[]
+            memory taskTypes = new Web3Campaigns.TaskType[](2);
+        taskTypes[0] = Web3Campaigns.TaskType.SOCIAL_FOLLOW;
+        taskTypes[1] = Web3Campaigns.TaskType.ONCHAIN_TX;
+
+        string[] memory descriptions = new string[](2);
+        descriptions[0] = "Follow the campaign host";
+        descriptions[1] = "Make a transaction";
+
+        bytes[] memory verificationData = new bytes[](2);
+        verificationData[0] = abi.encode("twitter_handle");
+        verificationData[1] = abi.encode(uint256(1));
+
+        bool[] memory isOptional = new bool[](2);
+        isOptional[0] = false;
+        isOptional[1] = true;
+
+        vm.startPrank(host1);
+        uint256 campaignId = campaigns.createCampaignWithTasksAndReward(
+            "Single Tx Campaign",
+            startTime,
+            endTime,
+            taskTypes,
+            descriptions,
+            verificationData,
+            isOptional,
+            Web3Campaigns.RewardType.ERC20,
+            address(mockERC20),
+            1000
+        );
+        vm.stopPrank();
+
+        Web3Campaigns.Campaign memory campaign = campaigns.getCampaign(
+            campaignId
+        );
+        assertEq(campaign.id, campaignId, "Campaign ID should match");
+        assertEq(campaign.tasks.length, 2, "Task count should match");
+        assertEq(
+            uint8(campaign.reward.rewardType),
+            uint8(Web3Campaigns.RewardType.ERC20),
+            "Reward type should match"
+        );
+        assertEq(
+            campaign.reward.tokenAddress,
+            address(mockERC20),
+            "Reward token should match"
+        );
+        assertEq(
+            campaign.reward.amountOrTokenId,
+            1000,
+            "Reward amount should match"
+        );
+
+        Web3Campaigns.CampaignTask memory task0 = campaigns.getCampaignTask(
+            campaignId,
+            0
+        );
+        assertEq(
+            uint8(task0.taskType),
+            uint8(Web3Campaigns.TaskType.SOCIAL_FOLLOW),
+            "Task 0 type should match"
+        );
+        assertEq(
+            task0.description,
+            "Follow the campaign host",
+            "Task 0 description should match"
+        );
+
+        Web3Campaigns.CampaignTask memory task1 = campaigns.getCampaignTask(
+            campaignId,
+            1
+        );
+        assertEq(
+            uint8(task1.taskType),
+            uint8(Web3Campaigns.TaskType.ONCHAIN_TX),
+            "Task 1 type should match"
+        );
+        assertEq(
+            task1.description,
+            "Make a transaction",
+            "Task 1 description should match"
+        );
+    }
+
+    function test_CreateCampaignWithTasksAndReward_RevertsOnArrayMismatch()
+        public
+    {
+        uint256 startTime = getTimestamp() + 100;
+        uint256 endTime = getTimestamp() + 200;
+
+        Web3Campaigns.TaskType[]
+            memory taskTypes = new Web3Campaigns.TaskType[](1);
+        taskTypes[0] = Web3Campaigns.TaskType.SOCIAL_FOLLOW;
+
+        string[] memory descriptions = new string[](2);
+        descriptions[0] = "Follow the campaign host";
+        descriptions[1] = "Extra task";
+
+        bytes[] memory verificationData = new bytes[](1);
+        verificationData[0] = abi.encode("twitter_handle");
+
+        bool[] memory isOptional = new bool[](1);
+        isOptional[0] = false;
+
+        vm.startPrank(host1);
+        vm.expectRevert("Array length mismatch");
+        campaigns.createCampaignWithTasksAndReward(
+            "Mismatch Campaign",
+            startTime,
+            endTime,
+            taskTypes,
+            descriptions,
+            verificationData,
+            isOptional,
+            Web3Campaigns.RewardType.NONE,
+            address(0),
+            0
         );
         vm.stopPrank();
     }
