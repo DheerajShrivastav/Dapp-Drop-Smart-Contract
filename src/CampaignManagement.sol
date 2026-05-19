@@ -123,7 +123,7 @@ contract CampaignManagement is CampaignStorage {
         RewardType _rewardType,
         address _tokenAddress,
         uint256 _amountOrTokenId
-    ) external virtual returns (uint256) {
+    ) public virtual returns (uint256) {
         if (
             _taskTypes.length != _descriptions.length ||
             _taskTypes.length != _verificationData.length ||
@@ -223,7 +223,11 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.reward.rewardType != RewardType.NONE) {
             revert Web3Campaigns__RewardAlreadySet();
         }
-        if(_rewardType == RewardType.ERC20 || _rewardType == RewardType.ERC721_SINGLE || _rewardType == RewardType.ERC721_BATCH){
+        if (
+            _rewardType == RewardType.ERC20 ||
+            _rewardType == RewardType.ERC721_SINGLE ||
+            _rewardType == RewardType.ERC721_BATCH
+        ) {
             require(_tokenAddress != address(0), "Invalid token address");
             require(_tokenAddress.code.length > 0, "Token address has no code");
         }

@@ -106,7 +106,7 @@ contract Web3Campaigns is
         RewardType _rewardType,
         address _tokenAddress,
         uint256 _amountOrTokenId
-    ) external override whenNotPaused nonReentrant returns (uint256) {
+    ) public override whenNotPaused nonReentrant returns (uint256) {
         return
             super.createCampaignWithTasksAndReward(
                 _name,

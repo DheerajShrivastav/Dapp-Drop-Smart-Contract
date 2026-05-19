@@ -8,6 +8,7 @@ import {Test, console} from "forge-std/Test.sol";
 
 // Import your main contract directly
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
+import {CampaignStorage} from "../src/CampaignStorage.sol";
 
 // Import OpenZeppelin mock contracts for testing tokens
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -134,10 +135,10 @@ contract CampaignLifecycleTest is Test {
         uint256 startTime = getTimestamp() + 100;
         uint256 endTime = getTimestamp() + 200;
 
-        Web3Campaigns.TaskType[]
-            memory taskTypes = new Web3Campaigns.TaskType[](2);
-        taskTypes[0] = Web3Campaigns.TaskType.SOCIAL_FOLLOW;
-        taskTypes[1] = Web3Campaigns.TaskType.ONCHAIN_TX;
+        CampaignStorage.TaskType[] memory taskTypes =
+            new CampaignStorage.TaskType[](2);
+        taskTypes[0] = CampaignStorage.TaskType.SOCIAL_FOLLOW;
+        taskTypes[1] = CampaignStorage.TaskType.ONCHAIN_TX;
 
         string[] memory descriptions = new string[](2);
         descriptions[0] = "Follow the campaign host";
@@ -160,7 +161,7 @@ contract CampaignLifecycleTest is Test {
             descriptions,
             verificationData,
             isOptional,
-            Web3Campaigns.RewardType.ERC20,
+            CampaignStorage.RewardType.ERC20,
             address(mockERC20),
             1000
         );
@@ -173,7 +174,7 @@ contract CampaignLifecycleTest is Test {
         assertEq(campaign.tasks.length, 2, "Task count should match");
         assertEq(
             uint8(campaign.reward.rewardType),
-            uint8(Web3Campaigns.RewardType.ERC20),
+            uint8(CampaignStorage.RewardType.ERC20),
             "Reward type should match"
         );
         assertEq(
@@ -193,7 +194,7 @@ contract CampaignLifecycleTest is Test {
         );
         assertEq(
             uint8(task0.taskType),
-            uint8(Web3Campaigns.TaskType.SOCIAL_FOLLOW),
+            uint8(CampaignStorage.TaskType.SOCIAL_FOLLOW),
             "Task 0 type should match"
         );
         assertEq(
@@ -208,7 +209,7 @@ contract CampaignLifecycleTest is Test {
         );
         assertEq(
             uint8(task1.taskType),
-            uint8(Web3Campaigns.TaskType.ONCHAIN_TX),
+            uint8(CampaignStorage.TaskType.ONCHAIN_TX),
             "Task 1 type should match"
         );
         assertEq(
@@ -224,9 +225,9 @@ contract CampaignLifecycleTest is Test {
         uint256 startTime = getTimestamp() + 100;
         uint256 endTime = getTimestamp() + 200;
 
-        Web3Campaigns.TaskType[]
-            memory taskTypes = new Web3Campaigns.TaskType[](1);
-        taskTypes[0] = Web3Campaigns.TaskType.SOCIAL_FOLLOW;
+        CampaignStorage.TaskType[] memory taskTypes =
+            new CampaignStorage.TaskType[](1);
+        taskTypes[0] = CampaignStorage.TaskType.SOCIAL_FOLLOW;
 
         string[] memory descriptions = new string[](2);
         descriptions[0] = "Follow the campaign host";
@@ -248,7 +249,7 @@ contract CampaignLifecycleTest is Test {
             descriptions,
             verificationData,
             isOptional,
-            Web3Campaigns.RewardType.NONE,
+            CampaignStorage.RewardType.NONE,
             address(0),
             0
         );
