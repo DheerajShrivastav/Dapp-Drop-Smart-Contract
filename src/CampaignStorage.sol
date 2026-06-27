@@ -13,6 +13,8 @@ abstract contract CampaignStorage is AccessControl {
     bytes32 public constant HOST_ROLE = keccak256("HOST_ROLE");
     // Emergency admin role
     bytes32 public constant EMERGENCY_ADMIN = keccak256("EMERGENCY_ADMIN");
+    // Moderator role: can flag accounts for suspicious activity
+    bytes32 public constant MODERATOR_ROLE = keccak256("MODERATOR_ROLE");
 
     // --- Custom Errors ---
     error Web3Campaigns__CampaignNotFound();
@@ -39,6 +41,7 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__TaskNotFound();
     error Web3Campaigns__PosterCannotAcceptOwnTask();
     error Web3Campaigns__InvalidVerificationData();
+    error Web3Campaigns__NotSelfVerifiable();
     error Web3Campaigns__InsufficientERC20Balance();
     error Web3Campaigns__NotHoldingSpecificERC721();
     error Web3Campaigns__InvalidCampaignDuration();
@@ -238,6 +241,7 @@ abstract contract CampaignStorage is AccessControl {
     event EmergencyUnpause(address indexed admin, uint256 timestamp);
     event SecurityViolationDetected(address indexed user, string reason);
     event SuspiciousActivity(address indexed user, string activity);
+    event AccountFlagged(address indexed user, uint256 score, address indexed moderator);
     event FundsReceived(address indexed sender, uint256 amount);
     event EtherWithdrawn(address indexed to, uint256 amount);
 

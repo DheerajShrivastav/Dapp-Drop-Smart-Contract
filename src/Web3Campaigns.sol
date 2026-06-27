@@ -19,8 +19,25 @@ contract Web3Campaigns is
     string public constant VERSION = "0.2.0";
 
     constructor() {
-        // Grant emergency admin role to deployer
+        // Grant emergency admin and moderator roles to deployer
         _grantRole(EMERGENCY_ADMIN, msg.sender);
+        _grantRole(MODERATOR_ROLE, msg.sender);
+    }
+
+    /**
+     * @notice Flag (or clear) an account's suspicious-activity score.
+     * @dev Wires the anti-abuse gate enforced in ParticipantManagement.completeTask,
+     *      which previously read a score that was never written. Setting a score >=
+     *      MAX_SUSPICIOUS_SCORE blocks the account from completing tasks; set to 0 to clear.
+     * @param _user The account to flag.
+     * @param _score The suspicious-activity score to assign.
+     */
+    function flagAccount(address _user, uint256 _score) external onlyRole(MODERATOR_ROLE) {
+        if (_user == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        _suspiciousActivityScore[_user] = _score;
+        emit AccountFlagged(_user, _score, msg.sender);
     }
 
     /**
@@ -96,6 +113,15 @@ contract Web3Campaigns is
 
     fallback() external payable whenNotPaused {
         revert("Function does not exist");
+    }
+
+    // Secure wrapper for CampaignManagement.createCampaign
+    function createCampaign(
+        string memory _name,
+        uint256 _startTime,
+        uint256 _endTime
+    ) public override whenNotPaused returns (uint256) {
+        return super.createCampaign(_name, _startTime, _endTime);
     }
 
     // Secure wrapper for CampaignManagement.openCampaign

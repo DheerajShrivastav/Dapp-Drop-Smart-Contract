@@ -58,7 +58,7 @@ contract CampaignManagement is CampaignStorage {
         string memory _name,
         uint256 _startTime,
         uint256 _endTime
-    ) public onlyRole(HOST_ROLE) returns (uint256) {
+    ) public virtual onlyRole(HOST_ROLE) returns (uint256) {
         require(
             bytes(_name).length > 0 && bytes(_name).length <= 200,
             "Invalid name length"
@@ -514,7 +514,9 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.status != CampaignStatus.Open) {
             revert Web3Campaigns__CampaignNotOpen();
         }
-        // Allow ending before endTime if host decides to conclude early
+        // A campaign can only be ended at or after its scheduled endTime. Early
+        // conclusion is intentionally NOT supported, so that participants always
+        // have the full advertised window to complete tasks.
         if (block.timestamp < campaign.endTime) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }

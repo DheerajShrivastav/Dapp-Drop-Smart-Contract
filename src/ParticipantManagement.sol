@@ -64,9 +64,10 @@ contract ParticipantManagement is CampaignStorage {
 
         // --- On-chain verification for specific task types ---
         if (currentTask.taskType == TaskType.ONCHAIN_HOLD_ERC20) {
-            // Expects verificationData to be abi.encodePacked(tokenAddress, requiredAmount)
-            // Length check: address (20 bytes) + uint256 (32 bytes) = 52 bytes
-            if (currentTask.verificationData.length != 52) {
+            // Expects verificationData to be abi.encode(tokenAddress, requiredAmount)
+            // Standard ABI encoding pads the address to a full word:
+            // address (32 bytes) + uint256 (32 bytes) = 64 bytes
+            if (currentTask.verificationData.length != 64) {
                 revert Web3Campaigns__InvalidVerificationData();
             }
 
@@ -80,9 +81,10 @@ contract ParticipantManagement is CampaignStorage {
                 revert Web3Campaigns__InsufficientERC20Balance();
             }
         } else if (currentTask.taskType == TaskType.ONCHAIN_HOLD_ERC721) {
-            // Expects verificationData to be abi.encodePacked(tokenAddress, tokenId)
-            // Length check: address (20 bytes) + uint256 (32 bytes) = 52 bytes
-            if (currentTask.verificationData.length != 52) {
+            // Expects verificationData to be abi.encode(tokenAddress, tokenId)
+            // Standard ABI encoding pads the address to a full word:
+            // address (32 bytes) + uint256 (32 bytes) = 64 bytes
+            if (currentTask.verificationData.length != 64) {
                 revert Web3Campaigns__InvalidVerificationData();
             }
 
@@ -97,10 +99,12 @@ contract ParticipantManagement is CampaignStorage {
                 revert Web3Campaigns__NotHoldingSpecificERC721();
             }
         } else if (currentTask.taskType == TaskType.ONCHAIN_TX) {
-            // This type of task typically requires an oracle or a more complex proof system
-            // to verify a specific transaction. For a simple contract, this would remain
-            // a placeholder or be removed if not supported.
-            revert Web3Campaigns__InvalidTaskType(); // Indicate this type is not directly verifiable here
+            // A specific on-chain transaction cannot be self-asserted here without an
+            // oracle/proof system. It is instead settled via host (off-chain indexer)
+            // verification through verifyTaskCompletion, so we block self-completion
+            // rather than hard-reverting the whole task type (which would brick claims
+            // for any campaign that includes a mandatory ONCHAIN_TX task).
+            revert Web3Campaigns__NotSelfVerifiable();
         }
         // For other social tasks, this remains a self-assertion, requiring host verification.
 
@@ -145,9 +149,10 @@ contract ParticipantManagement is CampaignStorage {
         if (_taskIndex >= campaign.tasks.length) {
             revert Web3Campaigns__TaskNotFound();
         }
-        // Ensure it's not an on-chain task type that should be self-verified by participant or oracle-verified
+        // ONCHAIN_HOLD_* tasks are self-verified on-chain in completeTask and must NOT be
+        // host-overridable. ONCHAIN_TX, however, is settled by the host's off-chain indexer
+        // (see completeTask), so it IS host-verifiable here.
         if (
-            campaign.tasks[_taskIndex].taskType == TaskType.ONCHAIN_TX ||
             campaign.tasks[_taskIndex].taskType ==
             TaskType.ONCHAIN_HOLD_ERC20 ||
             campaign.tasks[_taskIndex].taskType == TaskType.ONCHAIN_HOLD_ERC721
@@ -207,10 +212,10 @@ contract ParticipantManagement is CampaignStorage {
             if (taskIndex >= campaign.tasks.length) {
                 revert Web3Campaigns__TaskNotFound();
             }
-            // Skip on-chain verifiable tasks
+            // ONCHAIN_HOLD_* are self-verified on-chain and not host-overridable.
+            // ONCHAIN_TX is host-verifiable (settled off-chain by the host's indexer).
             TaskType tType = campaign.tasks[taskIndex].taskType;
             if (
-                tType == TaskType.ONCHAIN_TX ||
                 tType == TaskType.ONCHAIN_HOLD_ERC20 ||
                 tType == TaskType.ONCHAIN_HOLD_ERC721
             ) {
