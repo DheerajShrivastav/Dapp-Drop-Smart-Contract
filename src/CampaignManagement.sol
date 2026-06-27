@@ -87,8 +87,6 @@ contract CampaignManagement is CampaignStorage {
         newCampaign.status = CampaignStatus.Draft;
         newCampaign.createdAt = uint224(block.timestamp);
         newCampaign.totalParticipants = 0;
-        newCampaign.claimCount = 0;
-        // rewardConfig is initialized with default values (all false/zero)
 
         _hostCampaigns[msg.sender].push(campaignId);
         _userCampaignCount[msg.sender]++;
@@ -238,9 +236,8 @@ contract CampaignManagement is CampaignStorage {
         }
 
         _erc20RewardToken[_campaignId] = _tokenAddress;
-        campaign.rewardConfig.rewardsConfigured = true;
 
-        emit ERC20RewardConfigured2(_campaignId, _tokenAddress);
+        emit ERC20RewardConfigured(_campaignId, _tokenAddress);
     }
 
     /**
@@ -532,18 +529,16 @@ contract CampaignManagement is CampaignStorage {
         string memory _description,
         bytes memory _metadata
     ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
+        if (_campaigns[_campaignId].status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
         require(bytes(_description).length > 0, "Description required");
         require(bytes(_description).length <= 500, "Description too long");
 
-        campaign.rewardConfig.offChainReward.enabled = true;
-        campaign.rewardConfig.offChainReward.rewardDescription = _description;
-        campaign.rewardConfig.offChainReward.rewardMetadata = _metadata;
-        campaign.rewardConfig.rewardsConfigured = true;
+        OffChainReward storage offChain = _offChainReward[_campaignId];
+        offChain.enabled = true;
+        offChain.rewardDescription = _description;
+        offChain.rewardMetadata = _metadata;
 
         emit OffChainRewardConfigured(_campaignId, _description);
     }
