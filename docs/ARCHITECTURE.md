@@ -37,7 +37,7 @@ AccessControl (OZ)
 
 ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (escrow into contract) → run campaign → `endCampaign` → `setERC20MerkleRoot` (off-chain allocations) → participants `claimERC20(amount, proof)` from escrow → after `Closed` + 30-day grace, host `withdrawUnclaimedERC20`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
 
-NFT: still the legacy live pool (`claimReward`) until Stage B2 migrates it to multi-standard (ERC721 + ERC1155) Merkle settlement.
+NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` → participants `claimNFT(standard, token, tokenId, amount, proof)` → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
 
 ## Conventions
 

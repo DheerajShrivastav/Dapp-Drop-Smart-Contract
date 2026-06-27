@@ -6,14 +6,16 @@
 
 ## Current state (2026-06-27)
 
-Active development on branch **`feature/v0.3-security-hardening`** (forked from `dev`). VERSION `0.3.0`. Two milestones landed:
+Active development on branch **`feature/v0.3-security-hardening`** (forked from `dev`). VERSION `0.3.0`. The reward system has been fully migrated to escrow + Merkle settlement:
 
 - **Stage A** (commit `85cf83d`) — correctness/anti-abuse fixes (task verification, anti-abuse gate, pause coverage).
-- **Stage B1** (commit `24f472a`) — **ERC20 escrow + post-campaign Merkle settlement** replaces the old host-pull live-distribution model.
+- **Stage B1** (`24f472a`) — **ERC20 escrow + post-campaign Merkle settlement** replaces the old host-pull live-distribution model.
+- **Stage B2** (`fd349a3`) — **multi-standard NFT (ERC721 + ERC1155) escrow + Merkle settlement**; legacy live NFT pool removed.
+- **Stage B3** (`4fd6088`) — deleted the now-dead live-reward scaffolding (structs, enums, claim ranks, stale views, 23 unused errors).
 
-Still **in progress**: Stage B2 (multi-standard NFT escrow + Merkle settlement) and B3 (delete the now-dead live-reward structs). Until B2 lands, the **legacy live NFT pool path is still present** (`setNFTReward`/`addNFTsToPool`/`claimReward` NFT branch).
+The contract is now **escrow + verify + Merkle-settle**. There is no live mid-campaign claim path. Off-chain rewards remain informational only.
 
-Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **35 tests passing.** Build clean. (Repo does not yet pass `forge fmt --check` — pre-existing; new code matches local style.)
+Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **45 tests passing** (4 suites). Build clean; contract size 18.7KB. (Repo does not yet pass `forge fmt --check` — pre-existing; new code matches local style.)
 
 Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **Merkle settlement after campaign end** is the claim model (not live mid-campaign); **`grantHostRole` stays open/unguarded** intentionally for now.
 

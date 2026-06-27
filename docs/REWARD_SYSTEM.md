@@ -1,6 +1,6 @@
 # Reward System — Web3Campaigns
 
-> As of `feature/v0.3-security-hardening`. ERC20 has moved to escrow + Merkle settlement (Stage B1). NFT is still the legacy live pool until Stage B2.
+> As of `feature/v0.3-security-hardening`. Both ERC20 (B1) and NFT (B2) use escrow + post-campaign Merkle settlement. The legacy live-distribution system was deleted in B3.
 
 ## Model: escrow + post-campaign Merkle settlement
 
@@ -25,14 +25,25 @@ Participant claim (ParticipantManagement.sol):
 
 Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`.
 
-## NFT (LEGACY — replaced in Stage B2)
+## NFT — multi-standard (ERC721 + ERC1155), Merkle settlement (Stage B2)
 
-Still the old live escrowed-pool FCFS path: `setNFTReward` + `addNFTsToPool` (escrows ERC721 via raw `transferFrom`), claimed through `claimReward` → `_processNFTReward` (sequential from `tokenIds[distributedCount]`, up to `maxPerParticipant`). This retains the front-running/silent-zero behavior and is slated for replacement by multi-standard (ERC721 + ERC1155) Merkle settlement in B2. Do not build on this path.
+State (CampaignStorage.sol): `_nftMerkleRoot`, `_nftLeafClaimed`, and the per-campaign escrow ownership maps `_escrowedERC721` (id→token→tokenId→held) / `_escrowedERC1155` (id→token→tokenId→amount). Web3Campaigns inherits OZ `ERC721Holder` + `ERC1155Holder` for safe custody.
+
+Host flow (CampaignManagement.sol):
+1. `depositERC721Rewards(id, token, tokenIds[])` / `depositERC1155Rewards(id, token, ids[], amounts[])` — escrow NFTs per campaign (Draft/Open/Ended), max 100/call. The ownership maps prevent one campaign's settlement from spending another's escrow.
+2. `setNFTMerkleRoot(id, root)` — Ended only; commits off-chain allocations. Updatable while Ended.
+3. `withdrawUnclaimedERC721(id, token, tokenIds[])` / `withdrawUnclaimedERC1155(id, token, ids[], amounts[])` — reclaim still-escrowed NFTs after Closed + grace.
+
+Participant claim (ParticipantManagement.sol):
+- `claimNFT(id, standard, token, tokenId, amount, proof)` — status Ended/Closed; leaf `keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount))))`; per-leaf claim guard (`_nftLeafClaimed`); decrements per-campaign escrow (reverts `NFTNotEscrowed` if not held); ERC721 via `safeTransferFrom`, ERC1155 via `safeTransferFrom(...,amount,"")`. `nonReentrant + whenNotPaused`.
+- Off-chain tooling builds the tree with leaf encoding `["address","uint8","address","uint256","uint256"]`.
+
+Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`.
 
 ## Off-chain reward
 
-`setOffChainReward(id, description, metadata)` — no on-chain payout; informational, relies on the `RewardClaimed` event / host fulfillment.
+`setOffChainReward(id, description, metadata)` — no on-chain payout; informational (stored in the standalone `_offChainReward` mapping). View: `getOffChainReward(id)`.
 
-## Removed in B1
+## Removed (B1–B3)
 
-The old ERC20 distribution-mode system is gone: `setERC20RewardFixed/FCFS/Tiered`, legacy `setCampaignReward`, `_processERC20Reward`, and `claimReward`'s ERC20 branch. The `DistributionMode`/`RewardTier`/tier/claim-rank structures still exist in storage but are now **dead** (scheduled for deletion in B3). Related: [[ARCHITECTURE]], [[SECURITY_FINDINGS]], [[TEST_AND_BUILD]].
+The entire live-distribution system is gone: ERC20 setters (`setERC20RewardFixed/FCFS/Tiered`, legacy `setCampaignReward`), NFT pool (`setNFTReward`/`addNFTsToPool`), `claimReward`, the `_processERC20Reward`/`_processNFTReward`/`_verifyAllTasksCompleted` internals, the `DistributionMode`/`RewardType` enums, the `RewardTier`/`NFTPool`/`ERC20Reward`/`NFTReward`/`CampaignRewardConfig` structs, claim-rank state (`_claimOrder`/`_rewardTiers`/`claimCount`), and 23 unused errors. Related: [[ARCHITECTURE]], [[SECURITY_FINDINGS]], [[TEST_AND_BUILD]].
