@@ -6,6 +6,10 @@
 
 **You are the developer. You are the security researcher.** Every line of AI-generated code must be reviewed as if you wrote it by hand. AI is a tool — you own the output.
 
+## Project Context Docs
+
+Before changing code, read [`docs/README.md`](docs/README.md) — code-verified architecture, reward semantics, security findings, and branch topology for the Web3Campaigns contracts. `dev` is the source-of-truth branch. These docs were derived from the actual Solidity; the older root-level markdown (README, CAMPAIGN_WORKFLOW, SECURITY_AUDIT_PLAN) may be stale.
+
 ## Security Rules for AI-Assisted Development
 
 ### Never expose secrets
