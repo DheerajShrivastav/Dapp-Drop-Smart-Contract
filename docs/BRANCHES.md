@@ -1,6 +1,10 @@
 # Branch Topology — Dapp-Drop
 
-Four branches, two independent dev lines from common ancestor `563f9f5` (master baseline / "security audit plan").
+**Active work:** `feature/v0.3-security-hardening` (forked from `dev`) holds the v0.3 escrow + Merkle settlement rewrite (Stage A `85cf83d`, Stage B1 `24f472a`). This is where current development happens; `dev` remains the prior source of truth until v0.3 merges back.
+
+---
+
+Four original branches, two independent dev lines from common ancestor `563f9f5` (master baseline / "security audit plan").
 
 - **`dev` = SOURCE OF TRUTH.** Most advanced: VERSION 0.2.0, Solidity 0.8.31, full flexible reward system + batch ops (`batchAddTasks`, `batchVerifyTaskCompletion`) + admin `withdrawETH`. Strict superset of `feature/flexible-reward-system`. Use this branch for all work.
 - **`origin/master`** — old baseline. Single flat `CampaignReward`. `dev` adds +841 lines of multi-asset/multi-mode rewards on top (see [REWARD_SYSTEM.md](REWARD_SYSTEM.md)).

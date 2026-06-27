@@ -1,31 +1,38 @@
 # Reward System — Web3Campaigns
 
-Reward config (on `dev`) is three **independent** sub-rewards that can all be active on one campaign, stored in `CampaignRewardConfig` (CampaignStorage.sol). There is **no ETH reward path** — ETH only enters via `receive()` and is recoverable by admin via `withdrawETH`.
+> As of `feature/v0.3-security-hardening`. ERC20 has moved to escrow + Merkle settlement (Stage B1). NFT is still the legacy live pool until Stage B2.
 
-## ERC20
+## Model: escrow + post-campaign Merkle settlement
 
-`ERC20Reward { enabled, tokenAddress, distributionMode, fixedAmount, totalPool, distributedAmount }`. Three modes via `DistributionMode { FIXED, TIERED, FCFS }`:
+The blockchain's job here is to **guarantee payment from escrow**; distribution *math* (fixed/tiered/FCFS/sybil-filtering) is computed **off-chain** after the campaign ends and committed as a Merkle root. This removes live-claim front-running, silent-zero claims, and the host-wallet rug/brick vector.
 
-- **FIXED**: every claimant gets `fixedAmount`.
-- **TIERED**: amount by `claimRank` matched against `_rewardTiers[campaignId]` (`RewardTier { startRank, endRank, amount }`); no match → 0.
-- **FCFS**: `fixedAmount` only if `distributedAmount + fixedAmount <= totalPool`, else 0 (no revert).
+There is **no ETH reward path** — ETH only enters via `receive()` and is recoverable by admin via `withdrawETH`.
 
-> **IMPORTANT:** ERC20 is paid via `IERC20(token).safeTransferFrom(campaign.host, msg.sender, amount)` — pulled **directly from the host's live wallet at claim time, NOT from contract escrow**. Host must maintain a standing allowance to the contract. (ParticipantManagement.sol ~L343)
+## ERC20 (DONE — Stage B1)
 
-## NFT (ERC721) — bulk pool, FCFS only
+State (CampaignStorage.sol): `_erc20RewardToken`, `_erc20Escrowed`, `_erc20Distributed`, `_erc20MerkleRoot`, `_erc20SettlementClaimed`, `_campaignClosedAt`, `_erc20Swept`.
 
-Host pre-funds via `addNFTsToPool` (NFTs escrowed **into** the contract via raw `transferFrom`). On claim, up to `maxPerParticipant` NFTs are sent from the contract via `nft.transferFrom(address(this), msg.sender, tokenId)`, sequentially from `tokenIds[distributedCount]`. Pool exhausted → 0 NFTs, no revert. Contract does **not** implement `onERC721Received` (fine for raw `transferFrom`; would break on `safeTransferFrom` minting).
+Host flow (CampaignManagement.sol):
+1. `configureERC20Reward(id, token)` — Draft only; records the reward token, sets `rewardsConfigured`.
+2. `fundCampaignERC20(id, amount)` — escrows tokens INTO the contract via `SafeERC20.safeTransferFrom(host -> contract)`. Allowed in Draft/Open/Ended (top-up). `_erc20Escrowed += amount`.
+3. `endCampaign(id)` — at/after `endTime`.
+4. `setERC20MerkleRoot(id, root)` — Ended only; commits off-chain allocations. Updatable while Ended, frozen at Closed.
+5. `withdrawUnclaimedERC20(id)` — after Closed + `CLAIM_GRACE_PERIOD` (30 days); sweeps `escrowed - distributed` to host; single-sweep guarded by `_erc20Swept`.
 
-## Off-chain
+Participant claim (ParticipantManagement.sol):
+- `claimERC20(id, amount, proof)` — status Ended or Closed; requires root set; one claim per account (`_erc20SettlementClaimed`); leaf is the **OZ StandardMerkleTree** format `keccak256(bytes.concat(keccak256(abi.encode(account, amount))))`; verified with OZ `MerkleProof.verify`; escrow-accounted (`InsufficientEscrow` if `distributed + amount > escrowed`); pays via `safeTransfer` from escrow. `nonReentrant + whenNotPaused` (Web3Campaigns wrapper).
+- Off-chain tooling must build the tree with `@openzeppelin/merkle-tree` using leaf encoding `["address","uint256"]` to match.
 
-`OffChainReward { description, metadata }` — no on-chain payout; relies on the `RewardClaimed` event / host fulfillment.
+Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`.
 
-## Claim ranking
+## NFT (LEGACY — replaced in Stage B2)
 
-Rank = order of `claimReward` txs (incrementing `campaign.claimCount`). TIERED/FCFS give the best rewards to the earliest claimers → front-runnable / MEV race (no commit-reveal). See [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md).
+Still the old live escrowed-pool FCFS path: `setNFTReward` + `addNFTsToPool` (escrows ERC721 via raw `transferFrom`), claimed through `claimReward` → `_processNFTReward` (sequential from `tokenIds[distributedCount]`, up to `maxPerParticipant`). This retains the front-running/silent-zero behavior and is slated for replacement by multi-standard (ERC721 + ERC1155) Merkle settlement in B2. Do not build on this path.
 
-## Reward setters (CampaignManagement, require Draft status)
+## Off-chain reward
 
-`setERC20RewardFixed`, `setERC20RewardFCFS`, `setERC20RewardTiered`, `setNFTReward`, `addNFTsToPool` (Draft **or** Open), `setOffChainReward`. Legacy `setCampaignReward` kept as a thin wrapper. The `RewardType` enum and old `CampaignReward` struct are legacy / event-only.
+`setOffChainReward(id, description, metadata)` — no on-chain payout; informational, relies on the `RewardClaimed` event / host fulfillment.
 
-Payout internals: `_processERC20Reward`, `_processNFTReward`, `_verifyAllTasksCompleted` (all in ParticipantManagement.sol). See also [ARCHITECTURE.md](ARCHITECTURE.md), [TEST_AND_BUILD.md](TEST_AND_BUILD.md).
+## Removed in B1
+
+The old ERC20 distribution-mode system is gone: `setERC20RewardFixed/FCFS/Tiered`, legacy `setCampaignReward`, `_processERC20Reward`, and `claimReward`'s ERC20 branch. The `DistributionMode`/`RewardTier`/tier/claim-rank structures still exist in storage but are now **dead** (scheduled for deletion in B3). Related: [[ARCHITECTURE]], [[SECURITY_FINDINGS]], [[TEST_AND_BUILD]].
