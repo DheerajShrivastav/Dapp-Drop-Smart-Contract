@@ -59,6 +59,17 @@ abstract contract CampaignStorage is AccessControl {
     // Batch Operation Errors
     error Web3Campaigns__ArrayLengthMismatch();
     error Web3Campaigns__BatchTooLarge();
+    // Merkle Settlement Errors
+    error Web3Campaigns__ERC20RewardNotConfigured();
+    error Web3Campaigns__EscrowNotFunded();
+    error Web3Campaigns__InsufficientEscrow();
+    error Web3Campaigns__MerkleRootNotSet();
+    error Web3Campaigns__InvalidMerkleProof();
+    error Web3Campaigns__AlreadyClaimedSettlement();
+    error Web3Campaigns__GracePeriodActive();
+    error Web3Campaigns__AlreadySwept();
+    error Web3Campaigns__NothingToSweep();
+    error Web3Campaigns__InvalidAmount();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -68,6 +79,8 @@ abstract contract CampaignStorage is AccessControl {
     uint256 public constant JOIN_COOLDOWN = 1 minutes;
     uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
     uint256 public constant MAX_BATCH_SIZE = 50;
+    // Grace window after a campaign is Closed before the host may sweep unclaimed escrow
+    uint256 public constant CLAIM_GRACE_PERIOD = 30 days;
     // --- Enums ---
     enum CampaignStatus {
         Draft, // Campaign created, host is adding tasks
@@ -199,6 +212,18 @@ abstract contract CampaignStorage is AccessControl {
     mapping(uint256 => mapping(address => uint256)) internal _claimOrder; // campaignId => participant => claimRank
     mapping(uint256 => RewardTier[]) internal _rewardTiers; // campaignId => tiers array
 
+    // --- Merkle settlement state (post-campaign ERC20 reward distribution) ---
+    // Rewards are escrowed in the contract; after the campaign ends, the host publishes a
+    // Merkle root of (account => amount) allocations computed off-chain, and participants
+    // claim against it. This removes the live-claim front-running/silent-zero/host-pull risks.
+    mapping(uint256 => address) internal _erc20RewardToken;  // campaignId => ERC20 reward token (0 = none)
+    mapping(uint256 => uint256) internal _erc20Escrowed;     // campaignId => total ERC20 escrowed
+    mapping(uint256 => uint256) internal _erc20Distributed;  // campaignId => total ERC20 claimed
+    mapping(uint256 => bytes32) internal _erc20MerkleRoot;   // campaignId => settlement root
+    mapping(uint256 => mapping(address => bool)) internal _erc20SettlementClaimed; // campaignId => account => claimed
+    mapping(uint256 => uint64) internal _campaignClosedAt;   // campaignId => close timestamp (grace start)
+    mapping(uint256 => bool) internal _erc20Swept;           // campaignId => unclaimed funds reclaimed by host
+
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
         uint256 indexed campaignId,
@@ -277,6 +302,13 @@ abstract contract CampaignStorage is AccessControl {
         uint256 indexed campaignId,
         uint256 count
     );
+
+    // Merkle Settlement Events
+    event ERC20RewardConfigured2(uint256 indexed campaignId, address indexed token);
+    event CampaignFundedERC20(uint256 indexed campaignId, address indexed funder, uint256 amount);
+    event ERC20MerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
+    event ERC20RewardClaimed(uint256 indexed campaignId, address indexed account, uint256 amount);
+    event UnclaimedERC20Swept(uint256 indexed campaignId, address indexed to, uint256 amount);
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {

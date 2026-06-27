@@ -244,5 +244,57 @@ contract CampaignViewFunctions is CampaignStorage {
         distributedNFTs = pool.distributedCount;
         remainingNFTs = totalNFTs - distributedNFTs;
     }
+
+    // ============================================
+    // MERKLE SETTLEMENT VIEW FUNCTIONS
+    // ============================================
+
+    /**
+     * @notice Get the ERC20 Merkle settlement state for a campaign.
+     * @param _campaignId Campaign ID
+     * @return token The configured ERC20 reward token (address(0) if unconfigured)
+     * @return escrowed Total tokens escrowed
+     * @return distributed Total tokens claimed so far
+     * @return merkleRoot The published settlement root (bytes32(0) if not yet set)
+     * @return closedAt Timestamp the campaign was Closed (0 if not closed)
+     * @return swept Whether the host has reclaimed the unclaimed remainder
+     */
+    function getERC20Settlement(
+        uint256 _campaignId
+    )
+        external
+        view
+        returns (
+            address token,
+            uint256 escrowed,
+            uint256 distributed,
+            bytes32 merkleRoot,
+            uint64 closedAt,
+            bool swept
+        )
+    {
+        if (_campaigns[_campaignId].id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        token = _erc20RewardToken[_campaignId];
+        escrowed = _erc20Escrowed[_campaignId];
+        distributed = _erc20Distributed[_campaignId];
+        merkleRoot = _erc20MerkleRoot[_campaignId];
+        closedAt = _campaignClosedAt[_campaignId];
+        swept = _erc20Swept[_campaignId];
+    }
+
+    /**
+     * @notice Whether an account has claimed its ERC20 settlement allocation.
+     * @param _campaignId Campaign ID
+     * @param _account The account to check
+     * @return True if the account has already claimed via claimERC20
+     */
+    function hasClaimedERC20(
+        uint256 _campaignId,
+        address _account
+    ) external view returns (bool) {
+        return _erc20SettlementClaimed[_campaignId][_account];
+    }
 }
 

@@ -5,6 +5,7 @@ import {CampaignStorage} from "./CampaignStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 // This contract manages participant actions like completing tasks and claiming rewards.
 contract ParticipantManagement is CampaignStorage {
@@ -267,88 +268,85 @@ contract ParticipantManagement is CampaignStorage {
         // Mark as claimed FIRST (Checks-Effects-Interactions pattern)
         _participantClaimedReward[msg.sender][_campaignId] = true;
 
-        // Assign claim order for tiered distribution
-        campaign.claimCount++;
-        uint256 claimRank = campaign.claimCount;
-        _claimOrder[_campaignId][msg.sender] = claimRank;
-
-        uint256 erc20Amount = 0;
+        // NOTE: ERC20 rewards are no longer distributed here. They use the post-campaign
+        // Merkle settlement path (configureERC20Reward / fundCampaignERC20 / setERC20MerkleRoot
+        // -> claimERC20). This function now only services the legacy live NFT pool, which is
+        // itself slated to move to Merkle settlement.
         uint256 nftCount = 0;
-
-        // Process ERC20 rewards
-        if (campaign.rewardConfig.erc20Reward.enabled) {
-            erc20Amount = _processERC20Reward(_campaignId, claimRank);
-        }
-
-        // Process NFT rewards
         if (campaign.rewardConfig.nftReward.enabled) {
             nftCount = _processNFTReward(_campaignId);
-        }
-
-        // Emit appropriate event
-        RewardType claimedType = RewardType.OTHER;
-        address tokenAddr = address(0);
-        uint256 amount = claimRank; // Use claimRank as identifier
-
-        if (campaign.rewardConfig.erc20Reward.enabled) {
-            claimedType = RewardType.ERC20;
-            tokenAddr = campaign.rewardConfig.erc20Reward.tokenAddress;
-            amount = erc20Amount;
-        } else if (campaign.rewardConfig.nftReward.enabled) {
-            claimedType = RewardType.ERC721_BATCH;
-            tokenAddr = campaign.rewardConfig.nftReward.pool.tokenAddress;
-            amount = nftCount;
         }
 
         emit RewardClaimed(
             _campaignId,
             msg.sender,
-            claimedType,
-            tokenAddr,
-            amount
+            campaign.rewardConfig.nftReward.enabled
+                ? RewardType.ERC721_BATCH
+                : RewardType.OTHER,
+            campaign.rewardConfig.nftReward.enabled
+                ? campaign.rewardConfig.nftReward.pool.tokenAddress
+                : address(0),
+            nftCount
         );
     }
 
     /**
-     * @dev Process ERC20 reward distribution based on distribution mode
+     * @notice Claim ERC20 rewards via post-campaign Merkle settlement.
+     * @dev Allocations are computed off-chain after the campaign ends and committed as a
+     *      Merkle root by the host (setERC20MerkleRoot). The leaf is the OpenZeppelin
+     *      StandardMerkleTree format: keccak256(bytes.concat(keccak256(abi.encode(account, amount)))).
+     *      Pays out of the contract-held escrow, so claims cannot be bricked by the host
+     *      revoking an allowance, and there is no claim-order front-running.
      * @param _campaignId Campaign ID
-     * @param _claimRank Participant's claim rank
-     * @return amount The amount of tokens transferred
+     * @param _amount The exact allocation for msg.sender as committed in the tree
+     * @param _proof Merkle proof for the (msg.sender, _amount) leaf
      */
-    function _processERC20Reward(
+    function claimERC20(
         uint256 _campaignId,
-        uint256 _claimRank
-    ) internal returns (uint256 amount) {
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
-        ERC20Reward storage reward = campaign.rewardConfig.erc20Reward;
 
-        if (reward.distributionMode == DistributionMode.FIXED) {
-            amount = reward.fixedAmount;
-        } else if (reward.distributionMode == DistributionMode.TIERED) {
-            // Find applicable tier based on claim rank
-            RewardTier[] storage tiers = _rewardTiers[_campaignId];
-            for (uint256 i = 0; i < tiers.length; i++) {
-                if (_claimRank >= tiers[i].startRank && _claimRank <= tiers[i].endRank) {
-                    amount = tiers[i].amount;
-                    break;
-                }
-            }
-        } else if (reward.distributionMode == DistributionMode.FCFS) {
-            // Take from pool until exhausted
-            if (reward.distributedAmount + reward.fixedAmount <= reward.totalPool) {
-                amount = reward.fixedAmount;
-            }
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        // Claims open once the campaign has Ended; they remain open after Closed until the
+        // host sweeps unclaimed funds (guarded by _erc20Swept in the transfer accounting).
+        if (
+            campaign.status != CampaignStatus.Ended &&
+            campaign.status != CampaignStatus.Closed
+        ) {
+            revert Web3Campaigns__CampaignNotYetEnded();
         }
 
-        if (amount > 0) {
-            // Update state before external call (CEI pattern)
-            reward.distributedAmount += amount;
-
-            // SafeERC20 handles allowance check and reverts on failure
-            IERC20(reward.tokenAddress).safeTransferFrom(campaign.host, msg.sender, amount);
+        bytes32 root = _erc20MerkleRoot[_campaignId];
+        if (root == bytes32(0)) {
+            revert Web3Campaigns__MerkleRootNotSet();
+        }
+        if (_erc20SettlementClaimed[_campaignId][msg.sender]) {
+            revert Web3Campaigns__AlreadyClaimedSettlement();
         }
 
-        return amount;
+        // OZ StandardMerkleTree leaf: double-hash of the ABI-encoded tuple.
+        bytes32 leaf = keccak256(
+            bytes.concat(keccak256(abi.encode(msg.sender, _amount)))
+        );
+        if (!MerkleProof.verify(_proof, root, leaf)) {
+            revert Web3Campaigns__InvalidMerkleProof();
+        }
+
+        // Effects (CEI): mark claimed and account the distribution before transferring.
+        _erc20SettlementClaimed[_campaignId][msg.sender] = true;
+        uint256 newDistributed = _erc20Distributed[_campaignId] + _amount;
+        if (newDistributed > _erc20Escrowed[_campaignId]) {
+            revert Web3Campaigns__InsufficientEscrow();
+        }
+        _erc20Distributed[_campaignId] = newDistributed;
+
+        IERC20(_erc20RewardToken[_campaignId]).safeTransfer(msg.sender, _amount);
+
+        emit ERC20RewardClaimed(_campaignId, msg.sender, _amount);
     }
 
     /**

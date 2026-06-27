@@ -16,7 +16,7 @@ contract Web3Campaigns is
     Pausable
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.2.0";
+    string public constant VERSION = "0.3.0";
 
     constructor() {
         // Grant emergency admin and moderator roles to deployer
@@ -152,5 +152,29 @@ contract Web3Campaigns is
         uint256 _campaignId
     ) public override whenNotPaused nonReentrant {
         super.claimReward(_campaignId);
+    }
+
+    // Secure wrapper for CampaignManagement.fundCampaignERC20
+    function fundCampaignERC20(
+        uint256 _campaignId,
+        uint256 _amount
+    ) public override whenNotPaused nonReentrant {
+        super.fundCampaignERC20(_campaignId, _amount);
+    }
+
+    // Secure wrapper for ParticipantManagement.claimERC20
+    function claimERC20(
+        uint256 _campaignId,
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) public override whenNotPaused nonReentrant {
+        super.claimERC20(_campaignId, _amount, _proof);
+    }
+
+    // Secure wrapper for CampaignManagement.withdrawUnclaimedERC20
+    function withdrawUnclaimedERC20(
+        uint256 _campaignId
+    ) public override whenNotPaused nonReentrant {
+        super.withdrawUnclaimedERC20(_campaignId);
     }
 }
