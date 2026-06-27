@@ -4,6 +4,7 @@ pragma solidity ^0.8.31;
 import {CampaignStorage} from "./CampaignStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
@@ -241,56 +242,6 @@ contract ParticipantManagement is CampaignStorage {
     }
 
     /**
-     * @dev Allows a participant to claim their reward after completing all required tasks.
-     * Supports ERC20 (fixed/tiered), NFT (bulk from pool), and off-chain rewards.
-     * @param _campaignId The ID of the campaign.
-     */
-    function claimReward(uint256 _campaignId) public virtual {
-        Campaign storage campaign = _campaigns[_campaignId];
-
-        // Basic validation
-        if (campaign.id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
-        }
-        if (campaign.status != CampaignStatus.Ended) {
-            revert Web3Campaigns__CampaignNotYetEnded();
-        }
-        if (_participantClaimedReward[msg.sender][_campaignId]) {
-            revert Web3Campaigns__AlreadyClaimed();
-        }
-        if (!campaign.rewardConfig.rewardsConfigured) {
-            revert Web3Campaigns__NoRewardSet();
-        }
-
-        // Verify all required tasks are completed
-        _verifyAllTasksCompleted(_campaignId);
-
-        // Mark as claimed FIRST (Checks-Effects-Interactions pattern)
-        _participantClaimedReward[msg.sender][_campaignId] = true;
-
-        // NOTE: ERC20 rewards are no longer distributed here. They use the post-campaign
-        // Merkle settlement path (configureERC20Reward / fundCampaignERC20 / setERC20MerkleRoot
-        // -> claimERC20). This function now only services the legacy live NFT pool, which is
-        // itself slated to move to Merkle settlement.
-        uint256 nftCount = 0;
-        if (campaign.rewardConfig.nftReward.enabled) {
-            nftCount = _processNFTReward(_campaignId);
-        }
-
-        emit RewardClaimed(
-            _campaignId,
-            msg.sender,
-            campaign.rewardConfig.nftReward.enabled
-                ? RewardType.ERC721_BATCH
-                : RewardType.OTHER,
-            campaign.rewardConfig.nftReward.enabled
-                ? campaign.rewardConfig.nftReward.pool.tokenAddress
-                : address(0),
-            nftCount
-        );
-    }
-
-    /**
      * @notice Claim ERC20 rewards via post-campaign Merkle settlement.
      * @dev Allocations are computed off-chain after the campaign ends and committed as a
      *      Merkle root by the host (setERC20MerkleRoot). The leaf is the OpenZeppelin
@@ -350,52 +301,76 @@ contract ParticipantManagement is CampaignStorage {
     }
 
     /**
-     * @dev Process NFT reward distribution from pool
+     * @notice Claim an NFT reward (ERC721 or ERC1155) via post-campaign Merkle settlement.
+     * @dev Allocations are computed off-chain and committed by the host (setNFTMerkleRoot).
+     *      Leaf: keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
+     *      Pays from the per-campaign escrow; the escrow ownership maps prevent draining another
+     *      campaign's NFTs. nonReentrant + whenNotPaused via the Web3Campaigns wrapper.
      * @param _campaignId Campaign ID
-     * @return nftCount Number of NFTs distributed
+     * @param _standard NFT standard (ERC721 or ERC1155)
+     * @param _token NFT contract address
+     * @param _tokenId Token id (specific NFT for ERC721; id for ERC1155)
+     * @param _amount Quantity (1 for ERC721; arbitrary for ERC1155) — must match the tree leaf
+     * @param _proof Merkle proof for the leaf
      */
-    function _processNFTReward(uint256 _campaignId) internal returns (uint256 nftCount) {
+    function claimNFT(
+        uint256 _campaignId,
+        NFTStandard _standard,
+        address _token,
+        uint256 _tokenId,
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
-        NFTReward storage reward = campaign.rewardConfig.nftReward;
-        NFTPool storage pool = reward.pool;
 
-        // Check if NFTs are available
-        if (pool.distributedCount >= pool.tokenIds.length) {
-            // No more NFTs, but don't revert - participant still gets other rewards
-            return 0;
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        if (
+            campaign.status != CampaignStatus.Ended &&
+            campaign.status != CampaignStatus.Closed
+        ) {
+            revert Web3Campaigns__CampaignNotYetEnded();
         }
 
-        uint256 nftsToDistribute = reward.maxPerParticipant;
-        uint256 available = pool.tokenIds.length - pool.distributedCount;
-        if (nftsToDistribute > available) {
-            nftsToDistribute = available;
+        bytes32 root = _nftMerkleRoot[_campaignId];
+        if (root == bytes32(0)) {
+            revert Web3Campaigns__MerkleRootNotSet();
         }
 
-        IERC721 nft = IERC721(pool.tokenAddress);
-
-        for (uint256 i = 0; i < nftsToDistribute; i++) {
-            uint256 tokenId = pool.tokenIds[pool.distributedCount];
-            nft.transferFrom(address(this), msg.sender, tokenId);
-            pool.distributedCount++;
+        bytes32 leaf = keccak256(
+            bytes.concat(
+                keccak256(abi.encode(msg.sender, uint8(_standard), _token, _tokenId, _amount))
+            )
+        );
+        if (_nftLeafClaimed[_campaignId][leaf]) {
+            revert Web3Campaigns__AlreadyClaimedSettlement();
+        }
+        if (!MerkleProof.verify(_proof, root, leaf)) {
+            revert Web3Campaigns__InvalidMerkleProof();
         }
 
-        return nftsToDistribute;
-    }
+        // Effects (CEI): mark the leaf claimed and decrement campaign escrow before transfer.
+        _nftLeafClaimed[_campaignId][leaf] = true;
 
-    /**
-     * @dev Verify participant has completed all required tasks
-     * @param _campaignId Campaign ID
-     */
-    function _verifyAllTasksCompleted(uint256 _campaignId) internal view {
-        Campaign storage campaign = _campaigns[_campaignId];
-        for (uint256 i = 0; i < campaign.tasks.length; i++) {
-            if (
-                !campaign.tasks[i].isOptional &&
-                !_participantTaskCompletion[msg.sender][_campaignId][i]
-            ) {
-                revert Web3Campaigns__AllTasksNotCompleted();
+        if (_standard == NFTStandard.ERC721) {
+            if (!_escrowedERC721[_campaignId][_token][_tokenId]) {
+                revert Web3Campaigns__NFTNotEscrowed();
             }
+            _escrowedERC721[_campaignId][_token][_tokenId] = false;
+
+            IERC721(_token).safeTransferFrom(address(this), msg.sender, _tokenId);
+        } else {
+            uint256 held = _escrowedERC1155[_campaignId][_token][_tokenId];
+            if (_amount == 0 || _amount > held) {
+                revert Web3Campaigns__NFTNotEscrowed();
+            }
+            _escrowedERC1155[_campaignId][_token][_tokenId] = held - _amount;
+
+            IERC1155(_token).safeTransferFrom(address(this), msg.sender, _tokenId, _amount, "");
         }
+
+        emit NFTRewardClaimed(_campaignId, msg.sender, _standard, _token, _tokenId, _amount);
     }
 }
 

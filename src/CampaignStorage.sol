@@ -70,6 +70,8 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__AlreadySwept();
     error Web3Campaigns__NothingToSweep();
     error Web3Campaigns__InvalidAmount();
+    error Web3Campaigns__NFTNotEscrowed();
+    error Web3Campaigns__InvalidNFTStandard();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -115,6 +117,12 @@ abstract contract CampaignStorage is AccessControl {
         FIXED,  // Same amount to all participants
         TIERED, // Different amounts based on claim rank
         FCFS    // First-come-first-served until pool exhausted
+    }
+
+    // Supported NFT standards for Merkle-settled NFT rewards
+    enum NFTStandard {
+        ERC721,  // tokenId is a specific NFT; amount is implicitly 1
+        ERC1155  // tokenId is an id; amount is the quantity
     }
 
     // --- Structs ---
@@ -224,6 +232,14 @@ abstract contract CampaignStorage is AccessControl {
     mapping(uint256 => uint64) internal _campaignClosedAt;   // campaignId => close timestamp (grace start)
     mapping(uint256 => bool) internal _erc20Swept;           // campaignId => unclaimed funds reclaimed by host
 
+    // --- Multi-standard NFT (ERC721 + ERC1155) Merkle settlement state ---
+    // NFTs are escrowed per-campaign (the ownership maps below prevent one campaign's
+    // settlement from draining another's escrow), and distributed by Merkle proof after end.
+    mapping(uint256 => bytes32) internal _nftMerkleRoot;     // campaignId => NFT settlement root
+    mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
+    mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721;     // id => token => tokenId => held
+    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
+
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
         uint256 indexed campaignId,
@@ -309,6 +325,17 @@ abstract contract CampaignStorage is AccessControl {
     event ERC20MerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
     event ERC20RewardClaimed(uint256 indexed campaignId, address indexed account, uint256 amount);
     event UnclaimedERC20Swept(uint256 indexed campaignId, address indexed to, uint256 amount);
+    event NFTRewardsDeposited(uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count);
+    event NFTMerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
+    event NFTRewardClaimed(
+        uint256 indexed campaignId,
+        address indexed account,
+        NFTStandard standard,
+        address token,
+        uint256 tokenId,
+        uint256 amount
+    );
+    event UnclaimedNFTsWithdrawn(uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count);
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {

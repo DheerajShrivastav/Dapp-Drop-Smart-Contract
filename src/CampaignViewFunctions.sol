@@ -296,5 +296,46 @@ contract CampaignViewFunctions is CampaignStorage {
     ) external view returns (bool) {
         return _erc20SettlementClaimed[_campaignId][_account];
     }
+
+    /**
+     * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
+     */
+    function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {
+        return _nftMerkleRoot[_campaignId];
+    }
+
+    /**
+     * @notice Whether a specific NFT settlement leaf has been claimed.
+     * @dev Recompute the leaf as
+     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
+     */
+    function isNFTLeafClaimed(
+        uint256 _campaignId,
+        bytes32 _leaf
+    ) external view returns (bool) {
+        return _nftLeafClaimed[_campaignId][_leaf];
+    }
+
+    /**
+     * @notice Whether a given ERC721 tokenId is currently escrowed for a campaign.
+     */
+    function isERC721Escrowed(
+        uint256 _campaignId,
+        address _token,
+        uint256 _tokenId
+    ) external view returns (bool) {
+        return _escrowedERC721[_campaignId][_token][_tokenId];
+    }
+
+    /**
+     * @notice Escrowed ERC1155 balance for a campaign/token/id.
+     */
+    function getERC1155Escrowed(
+        uint256 _campaignId,
+        address _token,
+        uint256 _tokenId
+    ) external view returns (uint256) {
+        return _escrowedERC1155[_campaignId][_token][_tokenId];
+    }
 }
 

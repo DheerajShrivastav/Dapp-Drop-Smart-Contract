@@ -3,6 +3,7 @@ pragma solidity ^0.8.31;
 
 import {CampaignStorage} from "./CampaignStorage.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -343,73 +344,179 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @notice Configure NFT reward for bulk distribution
-     * @dev NFTs are distributed FCFS from a pool
+     * @notice Escrow ERC721 NFTs into the campaign for later Merkle-settled distribution.
+     * @dev Pulls each tokenId from the host into the contract via safeTransferFrom and records
+     *      per-campaign ownership (so one campaign's settlement cannot drain another's escrow).
+     *      Allowed in Draft/Open/Ended. The host must approve this contract first.
      * @param _campaignId Campaign ID
-     * @param _tokenAddress ERC721 token contract address
-     * @param _maxPerParticipant Maximum NFTs per participant (usually 1)
+     * @param _token ERC721 contract address
+     * @param _tokenIds Token IDs to escrow (max 100 per call)
      */
-    function setNFTReward(
+    function depositERC721Rewards(
         uint256 _campaignId,
-        address _tokenAddress,
-        uint256 _maxPerParticipant
-    ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
-            revert Web3Campaigns__CampaignAlreadyStarted();
-        }
-        if (_tokenAddress == address(0)) {
+        address _token,
+        uint256[] calldata _tokenIds
+    ) public virtual onlyHost(_campaignId) {
+        _requireFundingStatus(_campaignId);
+        if (_token == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
         }
-        if (_maxPerParticipant == 0) {
-            revert Web3Campaigns__InvalidRewardAmount();
+        uint256 len = _tokenIds.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
         }
 
-        campaign.rewardConfig.nftReward.enabled = true;
-        campaign.rewardConfig.nftReward.distributionMode = DistributionMode.FCFS;
-        campaign.rewardConfig.nftReward.pool.tokenAddress = _tokenAddress;
-        campaign.rewardConfig.nftReward.maxPerParticipant = _maxPerParticipant;
-        campaign.rewardConfig.rewardsConfigured = true;
+        for (uint256 i; i < len; ++i) {
+            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = true;
+        }
 
-        emit NFTRewardConfigured(_campaignId, _tokenAddress, _maxPerParticipant);
+        emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC721, len);
+
+        // Interactions after effects (CEI)
+        for (uint256 i; i < len; ++i) {
+            IERC721(_token).safeTransferFrom(msg.sender, address(this), _tokenIds[i]);
+        }
     }
 
     /**
-     * @notice Add NFTs to the campaign's NFT pool for distribution
-     * @dev Host must approve contract for NFT transfers before calling
+     * @notice Escrow ERC1155 tokens into the campaign for later Merkle-settled distribution.
      * @param _campaignId Campaign ID
-     * @param _tokenIds Array of token IDs to add to pool
+     * @param _token ERC1155 contract address
+     * @param _ids Token ids
+     * @param _amounts Amounts per id (parallel array)
      */
-    function addNFTsToPool(
+    function depositERC1155Rewards(
         uint256 _campaignId,
-        uint256[] calldata _tokenIds
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
+    ) public virtual onlyHost(_campaignId) {
+        _requireFundingStatus(_campaignId);
+        if (_token == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        uint256 len = _ids.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (_amounts.length != len) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            if (_amounts[i] == 0) {
+                revert Web3Campaigns__InvalidAmount();
+            }
+            _escrowedERC1155[_campaignId][_token][_ids[i]] += _amounts[i];
+        }
+
+        emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC1155, len);
+
+        IERC1155(_token).safeBatchTransferFrom(msg.sender, address(this), _ids, _amounts, "");
+    }
+
+    /**
+     * @notice Publish (or update) the NFT reward Merkle root for settlement.
+     * @dev Only after the campaign has Ended. Leaf format:
+     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
+     *      Updatable while Ended, frozen at Closed.
+     * @param _campaignId Campaign ID
+     * @param _merkleRoot The settlement Merkle root
+     */
+    function setNFTMerkleRoot(
+        uint256 _campaignId,
+        bytes32 _merkleRoot
     ) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft && 
-            campaign.status != CampaignStatus.Open) {
+
+        if (campaign.status != CampaignStatus.Ended) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (_merkleRoot == bytes32(0)) {
+            revert Web3Campaigns__MerkleRootNotSet();
+        }
+
+        _nftMerkleRoot[_campaignId] = _merkleRoot;
+        emit NFTMerkleRootSet(_campaignId, _merkleRoot);
+    }
+
+    /**
+     * @notice Reclaim still-escrowed ERC721 NFTs after the grace period (unclaimed by winners).
+     * @dev Campaign must be Closed and CLAIM_GRACE_PERIOD elapsed. Only tokenIds still escrowed
+     *      (not claimed, not from another campaign) can be reclaimed.
+     */
+    function withdrawUnclaimedERC721(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _tokenIds
+    ) public virtual onlyHost(_campaignId) {
+        _requireSweepable(_campaignId);
+        uint256 len = _tokenIds.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            if (!_escrowedERC721[_campaignId][_token][_tokenIds[i]]) {
+                revert Web3Campaigns__NFTNotEscrowed();
+            }
+            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = false;
+        }
+
+        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC721, len);
+
+        address host = _campaigns[_campaignId].host;
+        for (uint256 i; i < len; ++i) {
+            IERC721(_token).safeTransferFrom(address(this), host, _tokenIds[i]);
+        }
+    }
+
+    /**
+     * @notice Reclaim still-escrowed ERC1155 balances after the grace period.
+     */
+    function withdrawUnclaimedERC1155(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
+    ) public virtual onlyHost(_campaignId) {
+        _requireSweepable(_campaignId);
+        uint256 len = _ids.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (_amounts.length != len) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            uint256 held = _escrowedERC1155[_campaignId][_token][_ids[i]];
+            if (_amounts[i] == 0 || _amounts[i] > held) {
+                revert Web3Campaigns__NFTNotEscrowed();
+            }
+            _escrowedERC1155[_campaignId][_token][_ids[i]] = held - _amounts[i];
+        }
+
+        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC1155, len);
+
+        IERC1155(_token).safeBatchTransferFrom(address(this), _campaigns[_campaignId].host, _ids, _amounts, "");
+    }
+
+    /// @dev Shared status guard for reward deposits (Draft/Open/Ended top-up).
+    function _requireFundingStatus(uint256 _campaignId) internal view {
+        CampaignStatus s = _campaigns[_campaignId].status;
+        if (s != CampaignStatus.Draft && s != CampaignStatus.Open && s != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignAlreadyEnded();
         }
-        if (!campaign.rewardConfig.nftReward.enabled) {
-            revert Web3Campaigns__NFTRewardNotEnabled();
-        }
-        if (_tokenIds.length == 0) {
-            revert Web3Campaigns__NoNFTsInPool();
-        }
-        require(_tokenIds.length <= 100, "Too many NFTs at once (max 100)");
+    }
 
-        // Effects: update state before external calls (CEI pattern)
-        for (uint256 i; i < _tokenIds.length; ++i) {
-            campaign.rewardConfig.nftReward.pool.tokenIds.push(_tokenIds[i]);
+    /// @dev Shared guard for unclaimed sweeps: Closed + grace elapsed.
+    function _requireSweepable(uint256 _campaignId) internal view {
+        if (_campaigns[_campaignId].status != CampaignStatus.Closed) {
+            revert Web3Campaigns__CampaignNotYetEnded();
         }
-
-        emit NFTsAddedToPool(_campaignId, _tokenIds.length);
-
-        // Interactions: external transfers after all state changes
-        IERC721 nft = IERC721(campaign.rewardConfig.nftReward.pool.tokenAddress);
-        for (uint256 i; i < _tokenIds.length; ++i) {
-            nft.transferFrom(msg.sender, address(this), _tokenIds[i]);
+        if (block.timestamp < _campaignClosedAt[_campaignId] + CLAIM_GRACE_PERIOD) {
+            revert Web3Campaigns__GracePeriodActive();
         }
     }
 
