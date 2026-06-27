@@ -26,3 +26,4 @@ Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **
 - [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) — original findings with current FIXED / OPEN / INTENTIONAL status.
 - [BRANCHES.md](BRANCHES.md) — branch topology and the v0.3 hardening branch.
 - [TEST_AND_BUILD.md](TEST_AND_BUILD.md) — toolchain setup, test coverage, how to build/run.
+- [NEXT_STEPS.md](NEXT_STEPS.md) — pick-up list: hardening items + Phase 2/3 roadmap.
