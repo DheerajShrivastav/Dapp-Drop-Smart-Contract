@@ -60,10 +60,7 @@ contract MerkleSettlementTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     /// @dev Create -> configure -> fund -> open -> end -> set root. Returns campaign id.
-    function _endedCampaignWithRoot(
-        bytes32 root,
-        uint256 fundAmount
-    ) internal returns (uint256 id) {
+    function _endedCampaignWithRoot(bytes32 root, uint256 fundAmount) internal returns (uint256 id) {
         uint256 startTime = block.timestamp + START_OFFSET;
         uint256 endTime = startTime + CAMPAIGN_DURATION;
 

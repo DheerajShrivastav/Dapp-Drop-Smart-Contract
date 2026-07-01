@@ -79,8 +79,8 @@ abstract contract CampaignStorage is AccessControl {
 
     // Supported NFT standards for Merkle-settled NFT rewards
     enum NFTStandard {
-        ERC721,  // tokenId is a specific NFT; amount is implicitly 1
-        ERC1155  // tokenId is an id; amount is the quantity
+        ERC721, // tokenId is a specific NFT; amount is implicitly 1
+        ERC1155 // tokenId is an id; amount is the quantity
     }
 
     // --- Structs ---
@@ -95,8 +95,8 @@ abstract contract CampaignStorage is AccessControl {
     // there is no on-chain payout; fulfillment is the host's responsibility off-chain.
     struct OffChainReward {
         bool enabled;
-        string rewardDescription;   // Description of off-chain reward
-        bytes rewardMetadata;       // Additional metadata (e.g., JSON)
+        string rewardDescription; // Description of off-chain reward
+        bytes rewardMetadata; // Additional metadata (e.g., JSON)
     }
 
     struct Campaign {
@@ -114,10 +114,8 @@ abstract contract CampaignStorage is AccessControl {
     // --- State Variables (Internal to be accessible by inheriting contracts) ---
     uint256 internal _campaignCounter;
     mapping(uint256 => Campaign) internal _campaigns;
-    mapping(address => mapping(uint256 => mapping(uint256 => bool)))
-        internal _participantTaskCompletion;
-    mapping(address => mapping(uint256 => bool))
-        internal _participantClaimedReward;
+    mapping(address => mapping(uint256 => mapping(uint256 => bool))) internal _participantTaskCompletion;
+    mapping(address => mapping(uint256 => bool)) internal _participantClaimedReward;
     mapping(address => uint256[]) internal _hostCampaigns;
     mapping(address => mapping(uint256 => bool)) internal _hasParticipated;
 
@@ -133,45 +131,31 @@ abstract contract CampaignStorage is AccessControl {
     // Rewards are escrowed in the contract; after the campaign ends, the host publishes a
     // Merkle root of (account => amount) allocations computed off-chain, and participants
     // claim against it. This removes the live-claim front-running/silent-zero/host-pull risks.
-    mapping(uint256 => address) internal _erc20RewardToken;  // campaignId => ERC20 reward token (0 = none)
-    mapping(uint256 => uint256) internal _erc20Escrowed;     // campaignId => total ERC20 escrowed
-    mapping(uint256 => uint256) internal _erc20Distributed;  // campaignId => total ERC20 claimed
-    mapping(uint256 => bytes32) internal _erc20MerkleRoot;   // campaignId => settlement root
+    mapping(uint256 => address) internal _erc20RewardToken; // campaignId => ERC20 reward token (0 = none)
+    mapping(uint256 => uint256) internal _erc20Escrowed; // campaignId => total ERC20 escrowed
+    mapping(uint256 => uint256) internal _erc20Distributed; // campaignId => total ERC20 claimed
+    mapping(uint256 => bytes32) internal _erc20MerkleRoot; // campaignId => settlement root
     mapping(uint256 => mapping(address => bool)) internal _erc20SettlementClaimed; // campaignId => account => claimed
-    mapping(uint256 => uint64) internal _campaignClosedAt;   // campaignId => close timestamp (grace start)
-    mapping(uint256 => bool) internal _erc20Swept;           // campaignId => unclaimed funds reclaimed by host
+    mapping(uint256 => uint64) internal _campaignClosedAt; // campaignId => close timestamp (grace start)
+    mapping(uint256 => bool) internal _erc20Swept; // campaignId => unclaimed funds reclaimed by host
 
     // --- Multi-standard NFT (ERC721 + ERC1155) Merkle settlement state ---
     // NFTs are escrowed per-campaign (the ownership maps below prevent one campaign's
     // settlement from draining another's escrow), and distributed by Merkle proof after end.
-    mapping(uint256 => bytes32) internal _nftMerkleRoot;     // campaignId => NFT settlement root
+    mapping(uint256 => bytes32) internal _nftMerkleRoot; // campaignId => NFT settlement root
     mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
-    mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721;     // id => token => tokenId => held
+    mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
     mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
 
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
-        uint256 indexed campaignId,
-        address indexed host,
-        string name,
-        uint256 startTime,
-        uint256 endTime
+        uint256 indexed campaignId, address indexed host, string name, uint256 startTime, uint256 endTime
     );
     event TaskAddedToCampaign(
-        uint256 indexed campaignId,
-        uint256 indexed taskId,
-        TaskType taskType,
-        string description
+        uint256 indexed campaignId, uint256 indexed taskId, TaskType taskType, string description
     );
-    event CampaignStatusUpdated(
-        uint256 indexed campaignId,
-        CampaignStatus newStatus
-    );
-    event ParticipantTaskCompleted(
-        uint256 indexed campaignId,
-        address indexed participant,
-        uint256 indexed taskId
-    );
+    event CampaignStatusUpdated(uint256 indexed campaignId, CampaignStatus newStatus);
+    event ParticipantTaskCompleted(uint256 indexed campaignId, address indexed participant, uint256 indexed taskId);
 
     //Events for Security Purposes
     event EmergencyPause(address indexed admin, uint256 timestamp);
@@ -182,18 +166,9 @@ abstract contract CampaignStorage is AccessControl {
     event FundsReceived(address indexed sender, uint256 amount);
     event EtherWithdrawn(address indexed to, uint256 amount);
 
-    event OffChainRewardConfigured(
-        uint256 indexed campaignId,
-        string description
-    );
-    event BatchTasksVerified(
-        uint256 indexed campaignId,
-        uint256 count
-    );
-    event BatchTasksAdded(
-        uint256 indexed campaignId,
-        uint256 count
-    );
+    event OffChainRewardConfigured(uint256 indexed campaignId, string description);
+    event BatchTasksVerified(uint256 indexed campaignId, uint256 count);
+    event BatchTasksAdded(uint256 indexed campaignId, uint256 count);
 
     // Merkle Settlement Events
     event ERC20RewardConfigured(uint256 indexed campaignId, address indexed token);
@@ -211,7 +186,9 @@ abstract contract CampaignStorage is AccessControl {
         uint256 tokenId,
         uint256 amount
     );
-    event UnclaimedNFTsWithdrawn(uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count);
+    event UnclaimedNFTsWithdrawn(
+        uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count
+    );
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {
@@ -227,8 +204,7 @@ abstract contract CampaignStorage is AccessControl {
     modifier campaignTimeValid(uint256 _campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
         require(
-            block.timestamp >= campaign.startTime &&
-                block.timestamp <= campaign.endTime,
+            block.timestamp >= campaign.startTime && block.timestamp <= campaign.endTime,
             "Campaign not in active period"
         );
         _;
@@ -237,10 +213,7 @@ abstract contract CampaignStorage is AccessControl {
     /**
      * @notice Validate campaign parameters for security
      */
-    function _validateCampaignParams(
-        uint256 _startTime,
-        uint256 _endTime
-    ) internal view {
+    function _validateCampaignParams(uint256 _startTime, uint256 _endTime) internal view {
         if (_startTime <= block.timestamp) {
             revert Web3Campaigns__CampaignStartTimeNotYetStarted();
         }
@@ -259,10 +232,7 @@ abstract contract CampaignStorage is AccessControl {
      * @notice Rate limiting check
      */
     function _checkRateLimit(address _user) internal {
-        require(
-            block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN,
-            "Rate limit: too many actions"
-        );
+        require(block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN, "Rate limit: too many actions");
         _lastActivityTime[_user] = block.timestamp;
     }
 }

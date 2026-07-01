@@ -64,8 +64,7 @@ contract Web3Campaigns is
     /**
      * @notice Enhanced modifier with security checks
      */
-    modifier onlyHost(uint256 _campaignId)
-        override(CampaignManagement, ParticipantManagement, CampaignStorage) {
+    modifier onlyHost(uint256 _campaignId) override(CampaignManagement, ParticipantManagement, CampaignStorage) {
         require(!paused(), "Contract is paused");
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
@@ -84,10 +83,7 @@ contract Web3Campaigns is
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        require(
-            _campaigns[_campaignId].status == CampaignStatus.Open,
-            "Campaign not active"
-        );
+        require(_campaigns[_campaignId].status == CampaignStatus.Open, "Campaign not active");
         _;
     }
 
@@ -105,7 +101,7 @@ contract Web3Campaigns is
 
         emit EtherWithdrawn(_to, balance);
 
-        (bool success, ) = _to.call{value: balance}("");
+        (bool success,) = _to.call{value: balance}("");
         if (!success) {
             revert Web3Campaigns__TransferFailed();
         }
@@ -121,11 +117,12 @@ contract Web3Campaigns is
     }
 
     // Secure wrapper for CampaignManagement.createCampaign
-    function createCampaign(
-        string memory _name,
-        uint256 _startTime,
-        uint256 _endTime
-    ) public override whenNotPaused returns (uint256) {
+    function createCampaign(string memory _name, uint256 _startTime, uint256 _endTime)
+        public
+        override
+        whenNotPaused
+        returns (uint256)
+    {
         return super.createCampaign(_name, _startTime, _endTime);
     }
 
@@ -145,44 +142,38 @@ contract Web3Campaigns is
     }
 
     // Secure wrapper for ParticipantManagement.completeTask
-    function completeTask(
-        uint256 _campaignId,
-        uint256 _taskIndex
-    ) public override whenNotPaused nonReentrant {
+    function completeTask(uint256 _campaignId, uint256 _taskIndex) public override whenNotPaused nonReentrant {
         super.completeTask(_campaignId, _taskIndex);
     }
 
     // Secure wrapper for CampaignManagement.fundCampaignERC20
-    function fundCampaignERC20(
-        uint256 _campaignId,
-        uint256 _amount
-    ) public override whenNotPaused nonReentrant {
+    function fundCampaignERC20(uint256 _campaignId, uint256 _amount) public override whenNotPaused nonReentrant {
         super.fundCampaignERC20(_campaignId, _amount);
     }
 
     // Secure wrapper for ParticipantManagement.claimERC20
-    function claimERC20(
-        uint256 _campaignId,
-        uint256 _amount,
-        bytes32[] calldata _proof
-    ) public override whenNotPaused nonReentrant {
+    function claimERC20(uint256 _campaignId, uint256 _amount, bytes32[] calldata _proof)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
         super.claimERC20(_campaignId, _amount, _proof);
     }
 
     // Secure wrapper for CampaignManagement.withdrawUnclaimedERC20
-    function withdrawUnclaimedERC20(
-        uint256 _campaignId
-    ) public override whenNotPaused nonReentrant {
+    function withdrawUnclaimedERC20(uint256 _campaignId) public override whenNotPaused nonReentrant {
         super.withdrawUnclaimedERC20(_campaignId);
     }
 
     // ---- NFT (multi-standard) settlement wrappers ----
 
-    function depositERC721Rewards(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _tokenIds
-    ) public override whenNotPaused nonReentrant {
+    function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
         super.depositERC721Rewards(_campaignId, _token, _tokenIds);
     }
 
@@ -206,11 +197,12 @@ contract Web3Campaigns is
         super.claimNFT(_campaignId, _standard, _token, _tokenId, _amount, _proof);
     }
 
-    function withdrawUnclaimedERC721(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _tokenIds
-    ) public override whenNotPaused nonReentrant {
+    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
         super.withdrawUnclaimedERC721(_campaignId, _token, _tokenIds);
     }
 
@@ -224,9 +216,7 @@ contract Web3Campaigns is
     }
 
     /// @dev Resolve the diamond inheritance of supportsInterface (AccessControl + ERC1155Holder).
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view override(AccessControl, ERC1155Holder) returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, ERC1155Holder) returns (bool) {
         return super.supportsInterface(interfaceId);
     }
 }

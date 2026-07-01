@@ -43,9 +43,7 @@ contract CampaignManagement is CampaignStorage {
      * Only callable by an account with DEFAULT_ADMIN_ROLE.
      * @param _account The address to revoke the HOST_ROLE from.
      */
-    function revokeHostRole(
-        address _account
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function revokeHostRole(address _account) public onlyRole(DEFAULT_ADMIN_ROLE) {
         _revokeRole(HOST_ROLE, _account);
     }
 
@@ -58,15 +56,13 @@ contract CampaignManagement is CampaignStorage {
      * @param _endTime The timestamp when the campaign officially ends.
      * @return The ID of the newly created campaign.
      */
-    function createCampaign(
-        string memory _name,
-        uint256 _startTime,
-        uint256 _endTime
-    ) public virtual onlyRole(HOST_ROLE) returns (uint256) {
-        require(
-            bytes(_name).length > 0 && bytes(_name).length <= 200,
-            "Invalid name length"
-        );
+    function createCampaign(string memory _name, uint256 _startTime, uint256 _endTime)
+        public
+        virtual
+        onlyRole(HOST_ROLE)
+        returns (uint256)
+    {
+        require(bytes(_name).length > 0 && bytes(_name).length <= 200, "Invalid name length");
 
         // Rate Limiting
         _checkRateLimit(msg.sender);
@@ -91,13 +87,7 @@ contract CampaignManagement is CampaignStorage {
         _hostCampaigns[msg.sender].push(campaignId);
         _userCampaignCount[msg.sender]++;
 
-        emit CampaignCreated(
-            campaignId,
-            msg.sender,
-            _name,
-            _startTime,
-            _endTime
-        );
+        emit CampaignCreated(campaignId, msg.sender, _name, _startTime, _endTime);
         return campaignId;
     }
 
@@ -117,11 +107,7 @@ contract CampaignManagement is CampaignStorage {
         bool _isOptional
     ) public onlyHost(_campaignId) {
         // Add security validation
-        require(
-            bytes(_description).length > 0 &&
-                bytes(_description).length <= 1000,
-            "Invalid description length"
-        );
+        require(bytes(_description).length > 0 && bytes(_description).length <= 1000, "Invalid description length");
 
         Campaign storage campaign = _campaigns[_campaignId];
 
@@ -131,21 +117,17 @@ contract CampaignManagement is CampaignStorage {
         // Limit tasks per campaign for security
         require(campaign.tasks.length < 20, "Too many tasks per campaign");
 
-        campaign.tasks.push(
-            CampaignTask({
-                taskType: _taskType,
-                description: _description,
-                verificationData: _verificationData,
-                isOptional: _isOptional
-            })
-        );
+        campaign.tasks
+            .push(
+                CampaignTask({
+                    taskType: _taskType,
+                    description: _description,
+                    verificationData: _verificationData,
+                    isOptional: _isOptional
+                })
+            );
 
-        emit TaskAddedToCampaign(
-            _campaignId,
-            campaign.tasks.length - 1,
-            _taskType,
-            _description
-        );
+        emit TaskAddedToCampaign(_campaignId, campaign.tasks.length - 1, _taskType, _description);
     }
 
     /**
@@ -167,11 +149,7 @@ contract CampaignManagement is CampaignStorage {
         if (length == 0 || length > MAX_BATCH_SIZE) {
             revert Web3Campaigns__BatchTooLarge();
         }
-        if (
-            _descriptions.length != length ||
-            _verificationData.length != length ||
-            _isOptional.length != length
-        ) {
+        if (_descriptions.length != length || _verificationData.length != length || _isOptional.length != length) {
             revert Web3Campaigns__ArrayLengthMismatch();
         }
 
@@ -184,26 +162,21 @@ contract CampaignManagement is CampaignStorage {
 
         for (uint256 i; i < length; ++i) {
             require(
-                bytes(_descriptions[i]).length > 0 &&
-                    bytes(_descriptions[i]).length <= 1000,
+                bytes(_descriptions[i]).length > 0 && bytes(_descriptions[i]).length <= 1000,
                 "Invalid description length"
             );
 
-            campaign.tasks.push(
-                CampaignTask({
-                    taskType: _taskTypes[i],
-                    description: _descriptions[i],
-                    verificationData: _verificationData[i],
-                    isOptional: _isOptional[i]
-                })
-            );
+            campaign.tasks
+                .push(
+                    CampaignTask({
+                        taskType: _taskTypes[i],
+                        description: _descriptions[i],
+                        verificationData: _verificationData[i],
+                        isOptional: _isOptional[i]
+                    })
+                );
 
-            emit TaskAddedToCampaign(
-                _campaignId,
-                campaign.tasks.length - 1,
-                _taskTypes[i],
-                _descriptions[i]
-            );
+            emit TaskAddedToCampaign(_campaignId, campaign.tasks.length - 1, _taskTypes[i], _descriptions[i]);
         }
 
         emit BatchTasksAdded(_campaignId, length);
@@ -222,10 +195,7 @@ contract CampaignManagement is CampaignStorage {
      * @param _campaignId Campaign ID
      * @param _tokenAddress ERC20 token contract address
      */
-    function configureERC20Reward(
-        uint256 _campaignId,
-        address _tokenAddress
-    ) public onlyHost(_campaignId) {
+    function configureERC20Reward(uint256 _campaignId, address _tokenAddress) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Draft) {
@@ -248,10 +218,7 @@ contract CampaignManagement is CampaignStorage {
      * @param _campaignId Campaign ID
      * @param _amount Amount of the configured reward token to escrow
      */
-    function fundCampaignERC20(
-        uint256 _campaignId,
-        uint256 _amount
-    ) public virtual onlyHost(_campaignId) {
+    function fundCampaignERC20(uint256 _campaignId, uint256 _amount) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         address token = _erc20RewardToken[_campaignId];
@@ -262,9 +229,8 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__InvalidAmount();
         }
         if (
-            campaign.status != CampaignStatus.Draft &&
-            campaign.status != CampaignStatus.Open &&
-            campaign.status != CampaignStatus.Ended
+            campaign.status != CampaignStatus.Draft && campaign.status != CampaignStatus.Open
+                && campaign.status != CampaignStatus.Ended
         ) {
             revert Web3Campaigns__CampaignAlreadyEnded();
         }
@@ -287,10 +253,7 @@ contract CampaignManagement is CampaignStorage {
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
-    function setERC20MerkleRoot(
-        uint256 _campaignId,
-        bytes32 _merkleRoot
-    ) public onlyHost(_campaignId) {
+    function setERC20MerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Ended) {
@@ -313,9 +276,7 @@ contract CampaignManagement is CampaignStorage {
      *      elapsed since closing. Transfers the unclaimed remainder back to the host.
      * @param _campaignId Campaign ID
      */
-    function withdrawUnclaimedERC20(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function withdrawUnclaimedERC20(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Closed) {
@@ -349,11 +310,11 @@ contract CampaignManagement is CampaignStorage {
      * @param _token ERC721 contract address
      * @param _tokenIds Token IDs to escrow (max 100 per call)
      */
-    function depositERC721Rewards(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _tokenIds
-    ) public virtual onlyHost(_campaignId) {
+    function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        virtual
+        onlyHost(_campaignId)
+    {
         _requireFundingStatus(_campaignId);
         if (_token == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
@@ -420,10 +381,7 @@ contract CampaignManagement is CampaignStorage {
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
-    function setNFTMerkleRoot(
-        uint256 _campaignId,
-        bytes32 _merkleRoot
-    ) public onlyHost(_campaignId) {
+    function setNFTMerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Ended) {
@@ -442,11 +400,11 @@ contract CampaignManagement is CampaignStorage {
      * @dev Campaign must be Closed and CLAIM_GRACE_PERIOD elapsed. Only tokenIds still escrowed
      *      (not claimed, not from another campaign) can be reclaimed.
      */
-    function withdrawUnclaimedERC721(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _tokenIds
-    ) public virtual onlyHost(_campaignId) {
+    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        virtual
+        onlyHost(_campaignId)
+    {
         _requireSweepable(_campaignId);
         uint256 len = _tokenIds.length;
         if (len == 0 || len > 100) {
@@ -524,11 +482,10 @@ contract CampaignManagement is CampaignStorage {
      * @param _description Description of the reward
      * @param _metadata Additional metadata (can be JSON encoded)
      */
-    function setOffChainReward(
-        uint256 _campaignId,
-        string memory _description,
-        bytes memory _metadata
-    ) public onlyHost(_campaignId) {
+    function setOffChainReward(uint256 _campaignId, string memory _description, bytes memory _metadata)
+        public
+        onlyHost(_campaignId)
+    {
         if (_campaigns[_campaignId].status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
@@ -547,9 +504,7 @@ contract CampaignManagement is CampaignStorage {
      * @dev Sets the campaign status to Open. Can only be called by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function openCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function openCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
         if (campaign.status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
@@ -564,9 +519,7 @@ contract CampaignManagement is CampaignStorage {
      * This allows claims to begin.
      * @param _campaignId The ID of the campaign.
      */
-    function endCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function endCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Open) {
@@ -587,9 +540,7 @@ contract CampaignManagement is CampaignStorage {
      * @dev Closes the campaign, preventing further claims. Only callable by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function closeCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function closeCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Ended) {

@@ -46,11 +46,10 @@ contract StageAFixesTest is Test {
     // --- helpers ---
 
     /// @dev Creates an Open campaign with a single task of the given type/data, warped into its active window.
-    function _openCampaignWithTask(
-        CampaignStorage.TaskType taskType,
-        bytes memory verificationData,
-        bool isOptional
-    ) internal returns (uint256 campaignId) {
+    function _openCampaignWithTask(CampaignStorage.TaskType taskType, bytes memory verificationData, bool isOptional)
+        internal
+        returns (uint256 campaignId)
+    {
         uint256 startTime = block.timestamp + START_OFFSET;
         uint256 endTime = startTime + CAMPAIGN_DURATION;
 
@@ -73,11 +72,7 @@ contract StageAFixesTest is Test {
         bytes memory vData = abi.encode(address(mockERC20), uint256(100));
         assertEq(vData.length, 64, "abi.encode(address,uint256) must be 64 bytes");
 
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20,
-            vData,
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, vData, false);
 
         mockERC20.mint(participant1, 150);
 
@@ -89,11 +84,7 @@ contract StageAFixesTest is Test {
 
     function test_OnchainHoldERC20_RevertsOnInsufficientBalance() public {
         bytes memory vData = abi.encode(address(mockERC20), uint256(100));
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20,
-            vData,
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, vData, false);
 
         mockERC20.mint(participant1, 50); // below required 100
 
@@ -107,11 +98,7 @@ contract StageAFixesTest is Test {
         bytes memory packed = abi.encodePacked(address(mockERC20), uint256(100));
         assertEq(packed.length, 52);
 
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20,
-            packed,
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, packed, false);
 
         mockERC20.mint(participant1, 150);
 
@@ -125,11 +112,7 @@ contract StageAFixesTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_OnchainTx_SelfCompleteReverts() public {
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_TX,
-            "",
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
 
         vm.prank(participant1);
         vm.expectRevert(CampaignStorage.Web3Campaigns__NotSelfVerifiable.selector);
@@ -139,11 +122,7 @@ contract StageAFixesTest is Test {
     function test_OnchainTx_HostCanVerify() public {
         // Previously bricked: host verification of ONCHAIN_TX reverted, so a mandatory
         // ONCHAIN_TX task could never be completed. Now the host can verify it.
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_TX,
-            "",
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
 
         vm.prank(host1);
         campaigns.verifyTaskCompletion(campaignId, participant1, 0);
@@ -154,9 +133,7 @@ contract StageAFixesTest is Test {
     function test_OnchainHold_HostCannotVerify() public {
         // ONCHAIN_HOLD_* stays self-verified on-chain and must not be host-overridable.
         uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC721,
-            abi.encode(address(mockERC20), uint256(1)),
-            false
+            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC721, abi.encode(address(mockERC20), uint256(1)), false
         );
 
         vm.prank(host1);
@@ -169,11 +146,7 @@ contract StageAFixesTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_FlagAccount_BlocksCompleteTask() public {
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.SOCIAL_FOLLOW,
-            "",
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.SOCIAL_FOLLOW, "", false);
 
         vm.prank(deployer); // deployer holds MODERATOR_ROLE
         campaigns.flagAccount(participant1, 100); // == MAX_SUSPICIOUS_SCORE
@@ -190,11 +163,7 @@ contract StageAFixesTest is Test {
     }
 
     function test_FlagAccount_CanClear() public {
-        uint256 campaignId = _openCampaignWithTask(
-            CampaignStorage.TaskType.SOCIAL_FOLLOW,
-            "",
-            false
-        );
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.SOCIAL_FOLLOW, "", false);
 
         vm.prank(deployer);
         campaigns.flagAccount(participant1, 100);

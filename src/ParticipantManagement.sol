@@ -30,10 +30,7 @@ contract ParticipantManagement is CampaignStorage {
      * @param _campaignId The ID of the campaign.
      * @param _taskIndex The index of the task within the campaign's tasks array.
      */
-    function completeTask(
-        uint256 _campaignId,
-        uint256 _taskIndex
-    ) public virtual campaignTimeValid(_campaignId) {
+    function completeTask(uint256 _campaignId, uint256 _taskIndex) public virtual campaignTimeValid(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         // Basic checks for campaign and task existence/status
@@ -51,16 +48,10 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         // SECURITY CHECKS
-        require(
-            _suspiciousActivityScore[msg.sender] < MAX_SUSPICIOUS_SCORE,
-            "Account flagged for suspicious activity"
-        );
+        require(_suspiciousActivityScore[msg.sender] < MAX_SUSPICIOUS_SCORE, "Account flagged for suspicious activity");
 
         // Anti-spam protection
-        require(
-            block.timestamp - _lastActivityTime[msg.sender] >= 30 seconds,
-            "Too many rapid actions"
-        );
+        require(block.timestamp - _lastActivityTime[msg.sender] >= 30 seconds, "Too many rapid actions");
 
         CampaignTask storage currentTask = campaign.tasks[_taskIndex];
 
@@ -73,10 +64,8 @@ contract ParticipantManagement is CampaignStorage {
                 revert Web3Campaigns__InvalidVerificationData();
             }
 
-            (address tokenAddress, uint256 requiredAmount) = abi.decode(
-                currentTask.verificationData,
-                (address, uint256)
-            );
+            (address tokenAddress, uint256 requiredAmount) =
+                abi.decode(currentTask.verificationData, (address, uint256));
 
             // Perform the actual balance check
             if (IERC20(tokenAddress).balanceOf(msg.sender) < requiredAmount) {
@@ -90,10 +79,7 @@ contract ParticipantManagement is CampaignStorage {
                 revert Web3Campaigns__InvalidVerificationData();
             }
 
-            (address tokenAddress, uint256 tokenId) = abi.decode(
-                currentTask.verificationData,
-                (address, uint256)
-            );
+            (address tokenAddress, uint256 tokenId) = abi.decode(currentTask.verificationData, (address, uint256));
 
             // Perform the actual ownership check
             // ERC721's ownerOf will revert if tokenId doesn't exist, which is fine.
@@ -132,19 +118,15 @@ contract ParticipantManagement is CampaignStorage {
      * @param _participant The address of the participant.
      * @param _taskIndex The index of the task within the campaign's tasks array.
      */
-    function verifyTaskCompletion(
-        uint256 _campaignId,
-        address _participant,
-        uint256 _taskIndex
-    ) public onlyHost(_campaignId) {
+    function verifyTaskCompletion(uint256 _campaignId, address _participant, uint256 _taskIndex)
+        public
+        onlyHost(_campaignId)
+    {
         // Apply onlyHost modifier directly here
         Campaign storage campaign = _campaigns[_campaignId];
 
         // Ensure campaign status allows verification
-        if (
-            campaign.status != CampaignStatus.Open &&
-            campaign.status != CampaignStatus.Ended
-        ) {
+        if (campaign.status != CampaignStatus.Open && campaign.status != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignNotOpen();
         }
         // Ensure task exists
@@ -155,9 +137,8 @@ contract ParticipantManagement is CampaignStorage {
         // host-overridable. ONCHAIN_TX, however, is settled by the host's off-chain indexer
         // (see completeTask), so it IS host-verifiable here.
         if (
-            campaign.tasks[_taskIndex].taskType ==
-            TaskType.ONCHAIN_HOLD_ERC20 ||
-            campaign.tasks[_taskIndex].taskType == TaskType.ONCHAIN_HOLD_ERC721
+            campaign.tasks[_taskIndex].taskType == TaskType.ONCHAIN_HOLD_ERC20
+                || campaign.tasks[_taskIndex].taskType == TaskType.ONCHAIN_HOLD_ERC721
         ) {
             revert Web3Campaigns__TaskNotVerifiableByHost();
         }
@@ -166,9 +147,7 @@ contract ParticipantManagement is CampaignStorage {
             revert Web3Campaigns__TaskAlreadyCompleted();
         }
 
-        _participantTaskCompletion[_participant][_campaignId][
-            _taskIndex
-        ] = true;
+        _participantTaskCompletion[_participant][_campaignId][_taskIndex] = true;
 
         // Accurately track unique participants
         if (!_hasParticipated[_participant][_campaignId]) {
@@ -200,10 +179,7 @@ contract ParticipantManagement is CampaignStorage {
 
         Campaign storage campaign = _campaigns[_campaignId];
 
-        if (
-            campaign.status != CampaignStatus.Open &&
-            campaign.status != CampaignStatus.Ended
-        ) {
+        if (campaign.status != CampaignStatus.Open && campaign.status != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignNotOpen();
         }
 
@@ -217,10 +193,7 @@ contract ParticipantManagement is CampaignStorage {
             // ONCHAIN_HOLD_* are self-verified on-chain and not host-overridable.
             // ONCHAIN_TX is host-verifiable (settled off-chain by the host's indexer).
             TaskType tType = campaign.tasks[taskIndex].taskType;
-            if (
-                tType == TaskType.ONCHAIN_HOLD_ERC20 ||
-                tType == TaskType.ONCHAIN_HOLD_ERC721
-            ) {
+            if (tType == TaskType.ONCHAIN_HOLD_ERC20 || tType == TaskType.ONCHAIN_HOLD_ERC721) {
                 revert Web3Campaigns__TaskNotVerifiableByHost();
             }
             // Skip already completed
@@ -252,11 +225,7 @@ contract ParticipantManagement is CampaignStorage {
      * @param _amount The exact allocation for msg.sender as committed in the tree
      * @param _proof Merkle proof for the (msg.sender, _amount) leaf
      */
-    function claimERC20(
-        uint256 _campaignId,
-        uint256 _amount,
-        bytes32[] calldata _proof
-    ) public virtual {
+    function claimERC20(uint256 _campaignId, uint256 _amount, bytes32[] calldata _proof) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.id == 0) {
@@ -264,10 +233,7 @@ contract ParticipantManagement is CampaignStorage {
         }
         // Claims open once the campaign has Ended; they remain open after Closed until the
         // host sweeps unclaimed funds (guarded by _erc20Swept in the transfer accounting).
-        if (
-            campaign.status != CampaignStatus.Ended &&
-            campaign.status != CampaignStatus.Closed
-        ) {
+        if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }
 
@@ -280,9 +246,7 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         // OZ StandardMerkleTree leaf: double-hash of the ABI-encoded tuple.
-        bytes32 leaf = keccak256(
-            bytes.concat(keccak256(abi.encode(msg.sender, _amount)))
-        );
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, _amount))));
         if (!MerkleProof.verify(_proof, root, leaf)) {
             revert Web3Campaigns__InvalidMerkleProof();
         }
@@ -326,10 +290,7 @@ contract ParticipantManagement is CampaignStorage {
         if (campaign.id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        if (
-            campaign.status != CampaignStatus.Ended &&
-            campaign.status != CampaignStatus.Closed
-        ) {
+        if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }
 
@@ -338,11 +299,8 @@ contract ParticipantManagement is CampaignStorage {
             revert Web3Campaigns__MerkleRootNotSet();
         }
 
-        bytes32 leaf = keccak256(
-            bytes.concat(
-                keccak256(abi.encode(msg.sender, uint8(_standard), _token, _tokenId, _amount))
-            )
-        );
+        bytes32 leaf =
+            keccak256(bytes.concat(keccak256(abi.encode(msg.sender, uint8(_standard), _token, _tokenId, _amount))));
         if (_nftLeafClaimed[_campaignId][leaf]) {
             revert Web3Campaigns__AlreadyClaimedSettlement();
         }

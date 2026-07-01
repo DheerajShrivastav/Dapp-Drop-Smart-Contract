@@ -10,9 +10,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _campaignId The ID of the campaign.
      * @return Campaign struct.
      */
-    function getCampaign(
-        uint256 _campaignId
-    ) public view returns (Campaign memory) {
+    function getCampaign(uint256 _campaignId) public view returns (Campaign memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -25,10 +23,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _taskIndex The index of the task.
      * @return CampaignTask struct.
      */
-    function getCampaignTask(
-        uint256 _campaignId,
-        uint256 _taskIndex
-    ) public view returns (CampaignTask memory) {
+    function getCampaignTask(uint256 _campaignId, uint256 _taskIndex) public view returns (CampaignTask memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -45,13 +40,12 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _taskIndex The index of the task.
      * @return True if completed, false otherwise.
      */
-    function hasCompletedTask(
-        uint256 _campaignId,
-        address _participant,
-        uint256 _taskIndex
-    ) public view returns (bool) {
-        return
-            _participantTaskCompletion[_participant][_campaignId][_taskIndex];
+    function hasCompletedTask(uint256 _campaignId, address _participant, uint256 _taskIndex)
+        public
+        view
+        returns (bool)
+    {
+        return _participantTaskCompletion[_participant][_campaignId][_taskIndex];
     }
 
     /**
@@ -60,10 +54,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _participant The address of the participant.
      * @return True if claimed, false otherwise.
      */
-    function hasClaimedReward(
-        uint256 _campaignId,
-        address _participant
-    ) public view returns (bool) {
+    function hasClaimedReward(uint256 _campaignId, address _participant) public view returns (bool) {
         return _participantClaimedReward[_participant][_campaignId];
     }
 
@@ -80,9 +71,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _host The address of the host.
      * @return An array of uint256 representing campaign IDs.
      */
-    function getCampaignsByHost(
-        address _host
-    ) public view returns (uint256[] memory) {
+    function getCampaignsByHost(address _host) public view returns (uint256[] memory) {
         return _hostCampaigns[_host];
     }
 
@@ -92,10 +81,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _participant The address of the participant.
      * @return True if the participant has started, false otherwise.
      */
-    function hasParticipated(
-        uint256 _campaignId,
-        address _participant
-    ) public view returns (bool) {
+    function hasParticipated(uint256 _campaignId, address _participant) public view returns (bool) {
         return _hasParticipated[_participant][_campaignId];
     }
 
@@ -108,9 +94,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _campaignId Campaign ID
      * @return OffChainReward struct (enabled, description, metadata)
      */
-    function getOffChainReward(
-        uint256 _campaignId
-    ) external view returns (OffChainReward memory) {
+    function getOffChainReward(uint256 _campaignId) external view returns (OffChainReward memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -131,19 +115,10 @@ contract CampaignViewFunctions is CampaignStorage {
      * @return closedAt Timestamp the campaign was Closed (0 if not closed)
      * @return swept Whether the host has reclaimed the unclaimed remainder
      */
-    function getERC20Settlement(
-        uint256 _campaignId
-    )
+    function getERC20Settlement(uint256 _campaignId)
         external
         view
-        returns (
-            address token,
-            uint256 escrowed,
-            uint256 distributed,
-            bytes32 merkleRoot,
-            uint64 closedAt,
-            bool swept
-        )
+        returns (address token, uint256 escrowed, uint256 distributed, bytes32 merkleRoot, uint64 closedAt, bool swept)
     {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
@@ -162,10 +137,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _account The account to check
      * @return True if the account has already claimed via claimERC20
      */
-    function hasClaimedERC20(
-        uint256 _campaignId,
-        address _account
-    ) external view returns (bool) {
+    function hasClaimedERC20(uint256 _campaignId, address _account) external view returns (bool) {
         return _erc20SettlementClaimed[_campaignId][_account];
     }
 
@@ -181,32 +153,21 @@ contract CampaignViewFunctions is CampaignStorage {
      * @dev Recompute the leaf as
      *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
      */
-    function isNFTLeafClaimed(
-        uint256 _campaignId,
-        bytes32 _leaf
-    ) external view returns (bool) {
+    function isNFTLeafClaimed(uint256 _campaignId, bytes32 _leaf) external view returns (bool) {
         return _nftLeafClaimed[_campaignId][_leaf];
     }
 
     /**
      * @notice Whether a given ERC721 tokenId is currently escrowed for a campaign.
      */
-    function isERC721Escrowed(
-        uint256 _campaignId,
-        address _token,
-        uint256 _tokenId
-    ) external view returns (bool) {
+    function isERC721Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (bool) {
         return _escrowedERC721[_campaignId][_token][_tokenId];
     }
 
     /**
      * @notice Escrowed ERC1155 balance for a campaign/token/id.
      */
-    function getERC1155Escrowed(
-        uint256 _campaignId,
-        address _token,
-        uint256 _tokenId
-    ) external view returns (uint256) {
+    function getERC1155Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (uint256) {
         return _escrowedERC1155[_campaignId][_token][_tokenId];
     }
 }
