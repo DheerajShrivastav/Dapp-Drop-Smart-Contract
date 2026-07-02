@@ -21,12 +21,15 @@ contract Web3Campaigns is
     ERC1155Holder
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.3.0";
+    string public constant VERSION = "0.4.0";
 
     constructor() {
-        // Grant emergency admin and moderator roles to deployer
+        // Grant emergency admin, moderator, and (bootstrap) signer roles to deployer.
+        // DEFAULT_ADMIN_ROLE can grantRole/revokeRole(SIGNER_ROLE, ...) to rotate backend
+        // attestation keys without any custom rotation function — that's the intended path.
         _grantRole(EMERGENCY_ADMIN, msg.sender);
         _grantRole(MODERATOR_ROLE, msg.sender);
+        _grantRole(SIGNER_ROLE, msg.sender);
     }
 
     /**
@@ -144,6 +147,34 @@ contract Web3Campaigns is
     // Secure wrapper for ParticipantManagement.completeTask
     function completeTask(uint256 _campaignId, uint256 _taskIndex) public override whenNotPaused nonReentrant {
         super.completeTask(_campaignId, _taskIndex);
+    }
+
+    // Secure wrapper for ParticipantManagement.verifyTaskCompletionWithSignature
+    function verifyTaskCompletionWithSignature(
+        uint256 _campaignId,
+        address _participant,
+        uint256 _taskIndex,
+        bool _completed,
+        uint256 _deadline,
+        bytes calldata _signature
+    ) public override whenNotPaused {
+        super.verifyTaskCompletionWithSignature(
+            _campaignId, _participant, _taskIndex, _completed, _deadline, _signature
+        );
+    }
+
+    // Secure wrapper for ParticipantManagement.batchVerifyTaskCompletionWithSignatures
+    function batchVerifyTaskCompletionWithSignatures(
+        uint256 _campaignId,
+        address[] calldata _participants,
+        uint256[] calldata _taskIndices,
+        bool[] calldata _completedFlags,
+        uint256[] calldata _deadlines,
+        bytes[] calldata _signatures
+    ) public override whenNotPaused {
+        super.batchVerifyTaskCompletionWithSignatures(
+            _campaignId, _participants, _taskIndices, _completedFlags, _deadlines, _signatures
+        );
     }
 
     // Secure wrapper for CampaignManagement.fundCampaignERC20

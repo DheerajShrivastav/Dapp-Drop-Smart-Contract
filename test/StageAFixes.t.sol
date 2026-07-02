@@ -26,6 +26,43 @@ contract StageAFixesTest is Test {
     uint256 constant START_OFFSET = 1 days;
     uint256 constant CAMPAIGN_DURATION = 7 days;
 
+    // --- EIP-712 signing helpers (mirrors CampaignStorage's TASK_ATTESTATION_TYPEHASH) ---
+    bytes32 constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 constant TASK_ATTESTATION_TYPEHASH = keccak256(
+        "TaskAttestation(uint256 campaignId,address participant,uint256 taskIndex,bool completed,uint256 version,uint256 deadline)"
+    );
+
+    function _domainSeparator(address verifyingContract) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                EIP712_DOMAIN_TYPEHASH,
+                keccak256(bytes("Web3Campaigns")),
+                keccak256(bytes("1")),
+                block.chainid,
+                verifyingContract
+            )
+        );
+    }
+
+    function _signAttestation(
+        uint256 signerPk,
+        address verifyingContract,
+        uint256 campaignId,
+        address participant,
+        uint256 taskIndex,
+        bool completed,
+        uint256 version,
+        uint256 deadline
+    ) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(
+            abi.encode(TASK_ATTESTATION_TYPEHASH, campaignId, participant, taskIndex, completed, version, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(verifyingContract), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     function setUp() public {
         vm.warp(1_000_000);
 
@@ -119,26 +156,83 @@ contract StageAFixesTest is Test {
         campaigns.completeTask(campaignId, 0);
     }
 
-    function test_OnchainTx_HostCanVerify() public {
+    function test_OnchainTx_SignerCanVerify() public {
         // Previously bricked: host verification of ONCHAIN_TX reverted, so a mandatory
-        // ONCHAIN_TX task could never be completed. Now the host can verify it.
+        // ONCHAIN_TX task could never be completed. Now a SIGNER_ROLE-signed attestation
+        // completes it (deployer holds SIGNER_ROLE by default, pk=1).
         uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
 
-        vm.prank(host1);
-        campaigns.verifyTaskCompletion(campaignId, participant1, 0);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
 
         assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
     }
 
-    function test_OnchainHold_HostCannotVerify() public {
-        // ONCHAIN_HOLD_* stays self-verified on-chain and must not be host-overridable.
+    function test_OnchainHold_SignatureCannotVerify() public {
+        // ONCHAIN_HOLD_* stays self-verified on-chain and must not be signature-overridable.
         uint256 campaignId = _openCampaignWithTask(
             CampaignStorage.TaskType.ONCHAIN_HOLD_ERC721, abi.encode(address(mockERC20), uint256(1)), false
         );
 
-        vm.prank(host1);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+
         vm.expectRevert(CampaignStorage.Web3Campaigns__TaskNotVerifiableByHost.selector);
-        campaigns.verifyTaskCompletion(campaignId, participant1, 0);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
+    }
+
+    function test_VerifyTaskCompletionWithSignature_RevertsOnExpiredDeadline() public {
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+
+        vm.warp(deadline + 1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__SignatureExpired.selector);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
+    }
+
+    function test_VerifyTaskCompletionWithSignature_RevertsOnNonSigner() public {
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        // nonHost = vm.addr(3) does not hold SIGNER_ROLE.
+        bytes memory sig = _signAttestation(3, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
+    }
+
+    function test_VerifyTaskCompletionWithSignature_RevertsOnReplay() public {
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
+
+        // Same signature (still targeting version 1) can't be replayed now that version is 2.
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig);
+    }
+
+    function test_VerifyTaskCompletionWithSignature_SupportsReverification() public {
+        // A signer can issue a fresh attestation targeting the next version to flip a
+        // completion back to false (e.g. correcting a mistake), then re-affirm it later.
+        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.ONCHAIN_TX, "", false);
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bytes memory sig1 = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig1);
+        assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
+        assertEq(campaigns.getTaskAttestationVersion(campaignId, participant1, 0), 1);
+
+        bytes memory sig2 = _signAttestation(1, address(campaigns), campaignId, participant1, 0, false, 2, deadline);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, false, deadline, sig2);
+        assertFalse(campaigns.hasCompletedTask(campaignId, participant1, 0));
+        assertEq(campaigns.getTaskAttestationVersion(campaignId, participant1, 0), 2);
     }
 
     /*//////////////////////////////////////////////////////////////
