@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.31;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 // This contract defines all the shared data structures and state variables
@@ -13,6 +10,8 @@ abstract contract CampaignStorage is AccessControl {
     bytes32 public constant HOST_ROLE = keccak256("HOST_ROLE");
     // Emergency admin role
     bytes32 public constant EMERGENCY_ADMIN = keccak256("EMERGENCY_ADMIN");
+    // Moderator role: can flag accounts for suspicious activity
+    bytes32 public constant MODERATOR_ROLE = keccak256("MODERATOR_ROLE");
 
     // --- Custom Errors ---
     error Web3Campaigns__CampaignNotFound();
@@ -20,42 +19,32 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__CampaignNotOpen();
     error Web3Campaigns__CampaignAlreadyStarted();
     error Web3Campaigns__CampaignAlreadyEnded();
-    error Web3Campaigns__InvalidTaskType();
-    error Web3Campaigns__AllTasksNotCompleted();
-    error Web3Campaigns__AlreadyClaimed();
     error Web3Campaigns__TaskAlreadyCompleted();
     error Web3Campaigns__TaskNotVerifiableByHost();
-    error Web3Campaigns__InvalidRewardType();
-    error Web3Campaigns__InsufficientERC20Allowance();
-    error Web3Campaigns__ERC20TransferFailed();
-    error Web3Campaigns__ERC721TransferFailed();
-    error Web3Campaigns__NoRewardSet();
-    error Web3Campaigns__CampaignEnded();
     error Web3Campaigns__CampaignNotYetEnded();
     error Web3Campaigns__CampaignStartTimeNotYetStarted();
-    error Web3Campaigns__RewardAlreadySet();
-    error Web3Campaigns__InvalidRewardAmount();
     error Web3Campaigns__TransferFailed();
     error Web3Campaigns__TaskNotFound();
-    error Web3Campaigns__PosterCannotAcceptOwnTask();
     error Web3Campaigns__InvalidVerificationData();
+    error Web3Campaigns__NotSelfVerifiable();
     error Web3Campaigns__InsufficientERC20Balance();
     error Web3Campaigns__NotHoldingSpecificERC721();
     error Web3Campaigns__InvalidCampaignDuration();
-    // Flexible Reward System Errors
-    error Web3Campaigns__NFTPoolExhausted();
-    error Web3Campaigns__ERC20PoolExhausted();
-    error Web3Campaigns__InvalidTierConfiguration();
-    error Web3Campaigns__TooManyTiers();
-    error Web3Campaigns__NoNFTsInPool();
-    error Web3Campaigns__MaxNFTsPerParticipantExceeded();
     error Web3Campaigns__InvalidTokenAddress();
-    error Web3Campaigns__RewardNotConfigured();
-    error Web3Campaigns__NFTRewardNotEnabled();
-    error Web3Campaigns__ERC20RewardNotEnabled();
     // Batch Operation Errors
     error Web3Campaigns__ArrayLengthMismatch();
     error Web3Campaigns__BatchTooLarge();
+    // Merkle Settlement Errors
+    error Web3Campaigns__ERC20RewardNotConfigured();
+    error Web3Campaigns__InsufficientEscrow();
+    error Web3Campaigns__MerkleRootNotSet();
+    error Web3Campaigns__InvalidMerkleProof();
+    error Web3Campaigns__AlreadyClaimedSettlement();
+    error Web3Campaigns__GracePeriodActive();
+    error Web3Campaigns__AlreadySwept();
+    error Web3Campaigns__NothingToSweep();
+    error Web3Campaigns__InvalidAmount();
+    error Web3Campaigns__NFTNotEscrowed();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -65,6 +54,8 @@ abstract contract CampaignStorage is AccessControl {
     uint256 public constant JOIN_COOLDOWN = 1 minutes;
     uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
     uint256 public constant MAX_BATCH_SIZE = 50;
+    // Grace window after a campaign is Closed before the host may sweep unclaimed escrow
+    uint256 public constant CLAIM_GRACE_PERIOD = 30 days;
     // --- Enums ---
     enum CampaignStatus {
         Draft, // Campaign created, host is adding tasks
@@ -86,19 +77,10 @@ abstract contract CampaignStorage is AccessControl {
         ONCHAIN_HOLD_ERC721 // Hold a specific ERC-721 NFT
     }
 
-    enum RewardType {
-        ERC20, // ERC-20 token reward
-        ERC721_SINGLE, // Single ERC-721 token reward (transfer specific token)
-        ERC721_BATCH, // Batch ERC-721 token reward (mint/transfer multiple) - more complex
-        OTHER, // No on-chain reward (e.g., whitelist spot, off-chain prize)
-        NONE // No reward
-    }
-
-    // Distribution modes for flexible reward allocation
-    enum DistributionMode {
-        FIXED,  // Same amount to all participants
-        TIERED, // Different amounts based on claim rank
-        FCFS    // First-come-first-served until pool exhausted
+    // Supported NFT standards for Merkle-settled NFT rewards
+    enum NFTStandard {
+        ERC721, // tokenId is a specific NFT; amount is implicitly 1
+        ERC1155 // tokenId is an id; amount is the quantity
     }
 
     // --- Structs ---
@@ -109,58 +91,12 @@ abstract contract CampaignStorage is AccessControl {
         bool isOptional;
     }
 
-    // Individual reward tier for tiered distribution
-    struct RewardTier {
-        uint256 startRank;  // First rank eligible (1-indexed)
-        uint256 endRank;    // Last rank eligible (inclusive)
-        uint256 amount;     // Amount per participant in this tier
-    }
-
-    // NFT Pool for bulk distribution
-    struct NFTPool {
-        address tokenAddress;
-        uint256[] tokenIds;       // List of NFT token IDs to distribute
-        uint256 distributedCount; // How many have been distributed
-    }
-
-    // ERC20 Reward Configuration
-    struct ERC20Reward {
-        bool enabled;
-        address tokenAddress;
-        DistributionMode distributionMode;
-        uint256 fixedAmount;        // Used if distributionMode == FIXED
-        uint256 totalPool;          // Total tokens available (for FCFS)
-        uint256 distributedAmount;  // Track distributed tokens
-    }
-
-    // NFT Reward Configuration
-    struct NFTReward {
-        bool enabled;
-        DistributionMode distributionMode;
-        NFTPool pool;               // Pool of NFTs to distribute
-        uint256 maxPerParticipant;  // Max NFTs per participant
-    }
-
-    // Off-chain Reward Configuration
+    // Off-chain / "other" reward (whitelist spot, physical prize, etc.). Informational only —
+    // there is no on-chain payout; fulfillment is the host's responsibility off-chain.
     struct OffChainReward {
         bool enabled;
-        string rewardDescription;   // Description of off-chain reward
-        bytes rewardMetadata;       // Additional metadata (e.g., JSON)
-    }
-
-    // Complete Campaign Reward Configuration
-    struct CampaignRewardConfig {
-        ERC20Reward erc20Reward;
-        NFTReward nftReward;
-        OffChainReward offChainReward;
-        bool rewardsConfigured;     // Flag to check if rewards are set
-    }
-
-    // Legacy struct kept for backward compatibility in events
-    struct CampaignReward {
-        RewardType rewardType;
-        address tokenAddress;
-        uint256 amountOrTokenId;
+        string rewardDescription; // Description of off-chain reward
+        bytes rewardMetadata; // Additional metadata (e.g., JSON)
     }
 
     struct Campaign {
@@ -171,19 +107,15 @@ abstract contract CampaignStorage is AccessControl {
         uint256 endTime;
         CampaignStatus status;
         CampaignTask[] tasks;
-        CampaignRewardConfig rewardConfig;
         uint224 createdAt;
         uint256 totalParticipants;
-        uint256 claimCount;  // Track claim order for tiered distribution
     }
 
     // --- State Variables (Internal to be accessible by inheriting contracts) ---
     uint256 internal _campaignCounter;
     mapping(uint256 => Campaign) internal _campaigns;
-    mapping(address => mapping(uint256 => mapping(uint256 => bool)))
-        internal _participantTaskCompletion;
-    mapping(address => mapping(uint256 => bool))
-        internal _participantClaimedReward;
+    mapping(address => mapping(uint256 => mapping(uint256 => bool))) internal _participantTaskCompletion;
+    mapping(address => mapping(uint256 => bool)) internal _participantClaimedReward;
     mapping(address => uint256[]) internal _hostCampaigns;
     mapping(address => mapping(uint256 => bool)) internal _hasParticipated;
 
@@ -192,86 +124,70 @@ abstract contract CampaignStorage is AccessControl {
     mapping(address => uint256) internal _userCampaignCount;
     mapping(address => uint256) internal _suspiciousActivityScore;
 
-    // Reward system state variables
-    mapping(uint256 => mapping(address => uint256)) internal _claimOrder; // campaignId => participant => claimRank
-    mapping(uint256 => RewardTier[]) internal _rewardTiers; // campaignId => tiers array
+    // Off-chain reward config (informational; no on-chain payout)
+    mapping(uint256 => OffChainReward) internal _offChainReward;
+
+    // --- Merkle settlement state (post-campaign ERC20 reward distribution) ---
+    // Rewards are escrowed in the contract; after the campaign ends, the host publishes a
+    // Merkle root of (account => amount) allocations computed off-chain, and participants
+    // claim against it. This removes the live-claim front-running/silent-zero/host-pull risks.
+    mapping(uint256 => address) internal _erc20RewardToken; // campaignId => ERC20 reward token (0 = none)
+    mapping(uint256 => uint256) internal _erc20Escrowed; // campaignId => total ERC20 escrowed
+    mapping(uint256 => uint256) internal _erc20Distributed; // campaignId => total ERC20 claimed
+    mapping(uint256 => bytes32) internal _erc20MerkleRoot; // campaignId => settlement root
+    mapping(uint256 => mapping(address => bool)) internal _erc20SettlementClaimed; // campaignId => account => claimed
+    mapping(uint256 => uint64) internal _campaignClosedAt; // campaignId => close timestamp (grace start)
+    mapping(uint256 => bool) internal _erc20Swept; // campaignId => unclaimed funds reclaimed by host
+
+    // --- Multi-standard NFT (ERC721 + ERC1155) Merkle settlement state ---
+    // NFTs are escrowed per-campaign (the ownership maps below prevent one campaign's
+    // settlement from draining another's escrow), and distributed by Merkle proof after end.
+    mapping(uint256 => bytes32) internal _nftMerkleRoot; // campaignId => NFT settlement root
+    mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
+    mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
+    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
 
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
-        uint256 indexed campaignId,
-        address indexed host,
-        string name,
-        uint256 startTime,
-        uint256 endTime
+        uint256 indexed campaignId, address indexed host, string name, uint256 startTime, uint256 endTime
     );
     event TaskAddedToCampaign(
-        uint256 indexed campaignId,
-        uint256 indexed taskId,
-        TaskType taskType,
-        string description
+        uint256 indexed campaignId, uint256 indexed taskId, TaskType taskType, string description
     );
-    event CampaignStatusUpdated(
-        uint256 indexed campaignId,
-        CampaignStatus newStatus
-    );
-    event ParticipantTaskCompleted(
-        uint256 indexed campaignId,
-        address indexed participant,
-        uint256 indexed taskId
-    );
-    event RewardClaimed(
-        uint256 indexed campaignId,
-        address indexed participant,
-        RewardType rewardType,
-        address tokenAddress,
-        uint256 amountOrTokenId
-    );
-    event RewardSet(
-        uint256 indexed campaignId,
-        RewardType rewardType,
-        address tokenAddress,
-        uint256 amountOrTokenId
-    );
+    event CampaignStatusUpdated(uint256 indexed campaignId, CampaignStatus newStatus);
+    event ParticipantTaskCompleted(uint256 indexed campaignId, address indexed participant, uint256 indexed taskId);
 
     //Events for Security Purposes
     event EmergencyPause(address indexed admin, uint256 timestamp);
     event EmergencyUnpause(address indexed admin, uint256 timestamp);
     event SecurityViolationDetected(address indexed user, string reason);
     event SuspiciousActivity(address indexed user, string activity);
+    event AccountFlagged(address indexed user, uint256 score, address indexed moderator);
     event FundsReceived(address indexed sender, uint256 amount);
     event EtherWithdrawn(address indexed to, uint256 amount);
 
-    // Flexible Reward System Events
-    event ERC20RewardConfigured(
+    event OffChainRewardConfigured(uint256 indexed campaignId, string description);
+    event BatchTasksVerified(uint256 indexed campaignId, uint256 count);
+    event BatchTasksAdded(uint256 indexed campaignId, uint256 count);
+
+    // Merkle Settlement Events
+    event ERC20RewardConfigured(uint256 indexed campaignId, address indexed token);
+    event CampaignFundedERC20(uint256 indexed campaignId, address indexed funder, uint256 amount);
+    event ERC20MerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
+    event ERC20RewardClaimed(uint256 indexed campaignId, address indexed account, uint256 amount);
+    event UnclaimedERC20Swept(uint256 indexed campaignId, address indexed to, uint256 amount);
+    event NFTRewardsDeposited(uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count);
+    event NFTMerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
+    event NFTRewardClaimed(
         uint256 indexed campaignId,
-        address indexed tokenAddress,
-        DistributionMode mode,
+        address indexed account,
+        NFTStandard standard,
+        address token,
+        uint256 tokenId,
         uint256 amount
     );
-    event NFTRewardConfigured(
-        uint256 indexed campaignId,
-        address indexed tokenAddress,
-        uint256 maxPerParticipant
-    );
-    event OffChainRewardConfigured(
-        uint256 indexed campaignId,
-        string description
-    );
-    event NFTsAddedToPool(
-        uint256 indexed campaignId,
-        uint256 tokenCount
-    );
-    event TieredRewardConfigured(
-        uint256 indexed campaignId,
-        uint256 tierCount
-    );
-    event BatchTasksVerified(
-        uint256 indexed campaignId,
-        uint256 count
-    );
-    event BatchTasksAdded(
-        uint256 indexed campaignId,
-        uint256 count
+    event UnclaimedNFTsWithdrawn(
+        uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count
     );
 
     // --- Modifiers ---
@@ -288,8 +204,7 @@ abstract contract CampaignStorage is AccessControl {
     modifier campaignTimeValid(uint256 _campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
         require(
-            block.timestamp >= campaign.startTime &&
-                block.timestamp <= campaign.endTime,
+            block.timestamp >= campaign.startTime && block.timestamp <= campaign.endTime,
             "Campaign not in active period"
         );
         _;
@@ -298,10 +213,7 @@ abstract contract CampaignStorage is AccessControl {
     /**
      * @notice Validate campaign parameters for security
      */
-    function _validateCampaignParams(
-        uint256 _startTime,
-        uint256 _endTime
-    ) internal view {
+    function _validateCampaignParams(uint256 _startTime, uint256 _endTime) internal view {
         if (_startTime <= block.timestamp) {
             revert Web3Campaigns__CampaignStartTimeNotYetStarted();
         }
@@ -320,10 +232,7 @@ abstract contract CampaignStorage is AccessControl {
      * @notice Rate limiting check
      */
     function _checkRateLimit(address _user) internal {
-        require(
-            block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN,
-            "Rate limit: too many actions"
-        );
+        require(block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN, "Rate limit: too many actions");
         _lastActivityTime[_user] = block.timestamp;
     }
 }

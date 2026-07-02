@@ -48,14 +48,7 @@ contract CampaignLifecycleTest is Test {
         receivers[0] = host1;
         uint96[] memory amounts = new uint96[](1);
         amounts[0] = 1000;
-        mockERC721 = new ERC721ConsecutiveMock(
-            "MockNFT",
-            "MNFT",
-            0,
-            delegates,
-            receivers,
-            amounts
-        );
+        mockERC721 = new ERC721ConsecutiveMock("MockNFT", "MNFT", 0, delegates, receivers, amounts);
 
         vm.startPrank(deployer);
         campaigns.grantHostRole(host1);
@@ -71,11 +64,7 @@ contract CampaignLifecycleTest is Test {
         uint256 endTime = startTime + CAMPAIGN_DURATION;
 
         vm.prank(host1);
-        uint256 campaignId = campaigns.createCampaign(
-            "Test Campaign",
-            startTime,
-            endTime
-        );
+        uint256 campaignId = campaigns.createCampaign("Test Campaign", startTime, endTime);
 
         Web3Campaigns.Campaign memory campaign = campaigns.getCampaign(campaignId);
 
@@ -95,11 +84,7 @@ contract CampaignLifecycleTest is Test {
 
         // End time before start time
         vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidCampaignDuration.selector);
-        campaigns.createCampaign(
-            "Invalid Campaign 2",
-            block.timestamp + START_OFFSET,
-            block.timestamp + 50
-        );
+        campaigns.createCampaign("Invalid Campaign 2", block.timestamp + START_OFFSET, block.timestamp + 50);
         vm.stopPrank();
     }
 
@@ -238,13 +223,7 @@ contract CampaignLifecycleTest is Test {
 
         // Add a social task
         vm.prank(host1);
-        campaigns.addTaskToCampaign(
-            campaignId,
-            CampaignStorage.TaskType.SOCIAL_FOLLOW,
-            "Follow us",
-            "",
-            false
-        );
+        campaigns.addTaskToCampaign(campaignId, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Follow us", "", false);
 
         vm.warp(startTime + 1);
         vm.prank(host1);
@@ -273,7 +252,7 @@ contract CampaignLifecycleTest is Test {
     function test_WithdrawETH_Success() public {
         // Send ETH to the contract
         vm.deal(address(this), 1 ether);
-        (bool sent, ) = address(campaigns).call{value: 1 ether}("");
+        (bool sent,) = address(campaigns).call{value: 1 ether}("");
         assertTrue(sent);
 
         uint256 balBefore = deployer.balance;

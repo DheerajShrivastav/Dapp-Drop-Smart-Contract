@@ -10,9 +10,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _campaignId The ID of the campaign.
      * @return Campaign struct.
      */
-    function getCampaign(
-        uint256 _campaignId
-    ) public view returns (Campaign memory) {
+    function getCampaign(uint256 _campaignId) public view returns (Campaign memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -25,10 +23,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _taskIndex The index of the task.
      * @return CampaignTask struct.
      */
-    function getCampaignTask(
-        uint256 _campaignId,
-        uint256 _taskIndex
-    ) public view returns (CampaignTask memory) {
+    function getCampaignTask(uint256 _campaignId, uint256 _taskIndex) public view returns (CampaignTask memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -45,13 +40,12 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _taskIndex The index of the task.
      * @return True if completed, false otherwise.
      */
-    function hasCompletedTask(
-        uint256 _campaignId,
-        address _participant,
-        uint256 _taskIndex
-    ) public view returns (bool) {
-        return
-            _participantTaskCompletion[_participant][_campaignId][_taskIndex];
+    function hasCompletedTask(uint256 _campaignId, address _participant, uint256 _taskIndex)
+        public
+        view
+        returns (bool)
+    {
+        return _participantTaskCompletion[_participant][_campaignId][_taskIndex];
     }
 
     /**
@@ -60,10 +54,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _participant The address of the participant.
      * @return True if claimed, false otherwise.
      */
-    function hasClaimedReward(
-        uint256 _campaignId,
-        address _participant
-    ) public view returns (bool) {
+    function hasClaimedReward(uint256 _campaignId, address _participant) public view returns (bool) {
         return _participantClaimedReward[_participant][_campaignId];
     }
 
@@ -80,9 +71,7 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _host The address of the host.
      * @return An array of uint256 representing campaign IDs.
      */
-    function getCampaignsByHost(
-        address _host
-    ) public view returns (uint256[] memory) {
+    function getCampaignsByHost(address _host) public view returns (uint256[] memory) {
         return _hostCampaigns[_host];
     }
 
@@ -92,157 +81,94 @@ contract CampaignViewFunctions is CampaignStorage {
      * @param _participant The address of the participant.
      * @return True if the participant has started, false otherwise.
      */
-    function hasParticipated(
-        uint256 _campaignId,
-        address _participant
-    ) public view returns (bool) {
+    function hasParticipated(uint256 _campaignId, address _participant) public view returns (bool) {
         return _hasParticipated[_participant][_campaignId];
     }
 
     // ============================================
-    // FLEXIBLE REWARD VIEW FUNCTIONS
+    // REWARD VIEW FUNCTIONS
     // ============================================
 
     /**
-     * @notice Get ERC20 reward configuration for a campaign
+     * @notice Get the off-chain reward configuration for a campaign.
      * @param _campaignId Campaign ID
-     * @return ERC20Reward struct with configuration details
+     * @return OffChainReward struct (enabled, description, metadata)
      */
-    function getERC20RewardConfig(
-        uint256 _campaignId
-    ) external view returns (ERC20Reward memory) {
+    function getOffChainReward(uint256 _campaignId) external view returns (OffChainReward memory) {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        return _campaigns[_campaignId].rewardConfig.erc20Reward;
+        return _offChainReward[_campaignId];
     }
 
+    // ============================================
+    // MERKLE SETTLEMENT VIEW FUNCTIONS
+    // ============================================
+
     /**
-     * @notice Get NFT reward configuration for a campaign
+     * @notice Get the ERC20 Merkle settlement state for a campaign.
      * @param _campaignId Campaign ID
-     * @return NFTReward struct with configuration details
+     * @return token The configured ERC20 reward token (address(0) if unconfigured)
+     * @return escrowed Total tokens escrowed
+     * @return distributed Total tokens claimed so far
+     * @return merkleRoot The published settlement root (bytes32(0) if not yet set)
+     * @return closedAt Timestamp the campaign was Closed (0 if not closed)
+     * @return swept Whether the host has reclaimed the unclaimed remainder
      */
-    function getNFTRewardConfig(
-        uint256 _campaignId
-    ) external view returns (NFTReward memory) {
+    function getERC20Settlement(uint256 _campaignId)
+        external
+        view
+        returns (address token, uint256 escrowed, uint256 distributed, bytes32 merkleRoot, uint64 closedAt, bool swept)
+    {
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        return _campaigns[_campaignId].rewardConfig.nftReward;
+        token = _erc20RewardToken[_campaignId];
+        escrowed = _erc20Escrowed[_campaignId];
+        distributed = _erc20Distributed[_campaignId];
+        merkleRoot = _erc20MerkleRoot[_campaignId];
+        closedAt = _campaignClosedAt[_campaignId];
+        swept = _erc20Swept[_campaignId];
     }
 
     /**
-     * @notice Get off-chain reward configuration for a campaign
+     * @notice Whether an account has claimed its ERC20 settlement allocation.
      * @param _campaignId Campaign ID
-     * @return OffChainReward struct with configuration details
+     * @param _account The account to check
+     * @return True if the account has already claimed via claimERC20
      */
-    function getOffChainRewardConfig(
-        uint256 _campaignId
-    ) external view returns (OffChainReward memory) {
-        if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
-        }
-        return _campaigns[_campaignId].rewardConfig.offChainReward;
+    function hasClaimedERC20(uint256 _campaignId, address _account) external view returns (bool) {
+        return _erc20SettlementClaimed[_campaignId][_account];
     }
 
     /**
-     * @notice Get participant's claim rank for a campaign
-     * @param _campaignId Campaign ID
-     * @param _participant Participant address
-     * @return Claim rank (0 if not claimed)
+     * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
      */
-    function getClaimRank(
-        uint256 _campaignId,
-        address _participant
-    ) external view returns (uint256) {
-        return _claimOrder[_campaignId][_participant];
+    function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {
+        return _nftMerkleRoot[_campaignId];
     }
 
     /**
-     * @notice Get all reward tiers for a tiered distribution campaign
-     * @param _campaignId Campaign ID
-     * @return Array of RewardTier structs
+     * @notice Whether a specific NFT settlement leaf has been claimed.
+     * @dev Recompute the leaf as
+     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
      */
-    function getRewardTiers(
-        uint256 _campaignId
-    ) external view returns (RewardTier[] memory) {
-        return _rewardTiers[_campaignId];
+    function isNFTLeafClaimed(uint256 _campaignId, bytes32 _leaf) external view returns (bool) {
+        return _nftLeafClaimed[_campaignId][_leaf];
     }
 
     /**
-     * @notice Calculate potential reward for a participant at current claim count
-     * @param _campaignId Campaign ID
-     * @return erc20Amount Expected ERC20 tokens
-     * @return nftCount Expected NFT count
+     * @notice Whether a given ERC721 tokenId is currently escrowed for a campaign.
      */
-    function calculatePotentialReward(
-        uint256 _campaignId
-    ) external view returns (uint256 erc20Amount, uint256 nftCount) {
-        if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
-        }
-        
-        Campaign storage campaign = _campaigns[_campaignId];
-        uint256 nextRank = campaign.claimCount + 1;
-
-        // Calculate ERC20
-        if (campaign.rewardConfig.erc20Reward.enabled) {
-            ERC20Reward storage reward = campaign.rewardConfig.erc20Reward;
-            if (reward.distributionMode == DistributionMode.FIXED) {
-                erc20Amount = reward.fixedAmount;
-            } else if (reward.distributionMode == DistributionMode.TIERED) {
-                RewardTier[] storage tiers = _rewardTiers[_campaignId];
-                for (uint256 i = 0; i < tiers.length; i++) {
-                    if (nextRank >= tiers[i].startRank && nextRank <= tiers[i].endRank) {
-                        erc20Amount = tiers[i].amount;
-                        break;
-                    }
-                }
-            } else if (reward.distributionMode == DistributionMode.FCFS) {
-                if (reward.distributedAmount + reward.fixedAmount <= reward.totalPool) {
-                    erc20Amount = reward.fixedAmount;
-                }
-            }
-        }
-
-        // Calculate NFT
-        if (campaign.rewardConfig.nftReward.enabled) {
-            NFTPool storage pool = campaign.rewardConfig.nftReward.pool;
-            uint256 available = pool.tokenIds.length - pool.distributedCount;
-            uint256 maxPer = campaign.rewardConfig.nftReward.maxPerParticipant;
-            nftCount = available >= maxPer ? maxPer : available;
-        }
+    function isERC721Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (bool) {
+        return _escrowedERC721[_campaignId][_token][_tokenId];
     }
 
     /**
-     * @notice Get current claim count for a campaign
-     * @param _campaignId Campaign ID
-     * @return Number of rewards claimed
+     * @notice Escrowed ERC1155 balance for a campaign/token/id.
      */
-    function getClaimCount(uint256 _campaignId) external view returns (uint256) {
-        if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
-        }
-        return _campaigns[_campaignId].claimCount;
-    }
-
-    /**
-     * @notice Get NFT pool status for a campaign
-     * @param _campaignId Campaign ID
-     * @return totalNFTs Total NFTs in pool
-     * @return distributedNFTs NFTs already distributed
-     * @return remainingNFTs NFTs remaining
-     */
-    function getNFTPoolStatus(
-        uint256 _campaignId
-    ) external view returns (uint256 totalNFTs, uint256 distributedNFTs, uint256 remainingNFTs) {
-        if (_campaigns[_campaignId].id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
-        }
-        NFTPool storage pool = _campaigns[_campaignId].rewardConfig.nftReward.pool;
-        totalNFTs = pool.tokenIds.length;
-        distributedNFTs = pool.distributedCount;
-        remainingNFTs = totalNFTs - distributedNFTs;
+    function getERC1155Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (uint256) {
+        return _escrowedERC1155[_campaignId][_token][_tokenId];
     }
 }
 

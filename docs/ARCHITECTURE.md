@@ -19,9 +19,10 @@ AccessControl (OZ)
 ## Roles
 
 - `DEFAULT_ADMIN_ROLE` — revokeHostRole, withdrawETH.
-- `HOST_ROLE` — createCampaign.
+- `HOST_ROLE` — createCampaign. **Note: `grantHostRole` is intentionally open/unguarded** (anyone can self-grant) per founder decision; see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md).
 - `EMERGENCY_ADMIN` — emergencyPause / emergencyUnpause.
-- **Per-campaign `host`** — campaign ownership enforced by the `onlyHost` modifier (`campaign.host == msg.sender`), distinct from `HOST_ROLE`.
+- `MODERATOR_ROLE` — `flagAccount(user, score)` to set the suspicious-activity gate used in `completeTask`.
+- **Per-campaign `host`** — campaign ownership enforced by the `onlyHost` modifier (`campaign.host == msg.sender`), distinct from `HOST_ROLE`. Funds/configures/settles rewards and sweeps unclaimed escrow for its own campaigns.
 
 ## Lifecycle state machine (strictly forward, no reverse)
 
@@ -30,7 +31,13 @@ AccessControl (OZ)
 - **Draft**: configure tasks + rewards. Entered via `createCampaign` (HOST_ROLE).
 - `openCampaign` (host): Draft→Open. `completeTask` allowed only when Open + within start/end time.
 - `endCampaign` (host): Open→Ended, requires `block.timestamp >= endTime` (NOTE: code requires this despite a comment claiming early-end is allowed — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md)).
-- `closeCampaign` (host): Ended→Closed. `claimReward` allowed only when Ended.
+- `closeCampaign` (host): Ended→Closed (records `_campaignClosedAt` to start the unclaimed-sweep grace window).
+
+## Reward / claim flow (v0.3 — escrow + Merkle settlement)
+
+ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (escrow into contract) → run campaign → `endCampaign` → `setERC20MerkleRoot` (off-chain allocations) → participants `claimERC20(amount, proof)` from escrow → after `Closed` + 30-day grace, host `withdrawUnclaimedERC20`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
+
+NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` → participants `claimNFT(standard, token, tokenId, amount, proof)` → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
 
 ## Conventions
 

@@ -3,6 +3,9 @@ pragma solidity ^0.8.31;
 
 import {ReentrancyGuard} from "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Pausable} from "../lib/openzeppelin-contracts/contracts/utils/Pausable.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ERC721Holder} from "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
+import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 import {CampaignStorage} from "./CampaignStorage.sol";
 import {CampaignManagement} from "./CampaignManagement.sol";
 import {ParticipantManagement} from "./ParticipantManagement.sol";
@@ -13,14 +16,33 @@ contract Web3Campaigns is
     ParticipantManagement,
     CampaignViewFunctions,
     ReentrancyGuard,
-    Pausable
+    Pausable,
+    ERC721Holder,
+    ERC1155Holder
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.2.0";
+    string public constant VERSION = "0.3.0";
 
     constructor() {
-        // Grant emergency admin role to deployer
+        // Grant emergency admin and moderator roles to deployer
         _grantRole(EMERGENCY_ADMIN, msg.sender);
+        _grantRole(MODERATOR_ROLE, msg.sender);
+    }
+
+    /**
+     * @notice Flag (or clear) an account's suspicious-activity score.
+     * @dev Wires the anti-abuse gate enforced in ParticipantManagement.completeTask,
+     *      which previously read a score that was never written. Setting a score >=
+     *      MAX_SUSPICIOUS_SCORE blocks the account from completing tasks; set to 0 to clear.
+     * @param _user The account to flag.
+     * @param _score The suspicious-activity score to assign.
+     */
+    function flagAccount(address _user, uint256 _score) external onlyRole(MODERATOR_ROLE) {
+        if (_user == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        _suspiciousActivityScore[_user] = _score;
+        emit AccountFlagged(_user, _score, msg.sender);
     }
 
     /**
@@ -42,8 +64,7 @@ contract Web3Campaigns is
     /**
      * @notice Enhanced modifier with security checks
      */
-    modifier onlyHost(uint256 _campaignId)
-        override(CampaignManagement, ParticipantManagement, CampaignStorage) {
+    modifier onlyHost(uint256 _campaignId) override(CampaignManagement, ParticipantManagement, CampaignStorage) {
         require(!paused(), "Contract is paused");
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
@@ -62,10 +83,7 @@ contract Web3Campaigns is
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        require(
-            _campaigns[_campaignId].status == CampaignStatus.Open,
-            "Campaign not active"
-        );
+        require(_campaigns[_campaignId].status == CampaignStatus.Open, "Campaign not active");
         _;
     }
 
@@ -83,7 +101,7 @@ contract Web3Campaigns is
 
         emit EtherWithdrawn(_to, balance);
 
-        (bool success, ) = _to.call{value: balance}("");
+        (bool success,) = _to.call{value: balance}("");
         if (!success) {
             revert Web3Campaigns__TransferFailed();
         }
@@ -96,6 +114,16 @@ contract Web3Campaigns is
 
     fallback() external payable whenNotPaused {
         revert("Function does not exist");
+    }
+
+    // Secure wrapper for CampaignManagement.createCampaign
+    function createCampaign(string memory _name, uint256 _startTime, uint256 _endTime)
+        public
+        override
+        whenNotPaused
+        returns (uint256)
+    {
+        return super.createCampaign(_name, _startTime, _endTime);
     }
 
     // Secure wrapper for CampaignManagement.openCampaign
@@ -114,17 +142,81 @@ contract Web3Campaigns is
     }
 
     // Secure wrapper for ParticipantManagement.completeTask
-    function completeTask(
-        uint256 _campaignId,
-        uint256 _taskIndex
-    ) public override whenNotPaused nonReentrant {
+    function completeTask(uint256 _campaignId, uint256 _taskIndex) public override whenNotPaused nonReentrant {
         super.completeTask(_campaignId, _taskIndex);
     }
 
-    // Secure wrapper for ParticipantManagement.claimReward
-    function claimReward(
-        uint256 _campaignId
+    // Secure wrapper for CampaignManagement.fundCampaignERC20
+    function fundCampaignERC20(uint256 _campaignId, uint256 _amount) public override whenNotPaused nonReentrant {
+        super.fundCampaignERC20(_campaignId, _amount);
+    }
+
+    // Secure wrapper for ParticipantManagement.claimERC20
+    function claimERC20(uint256 _campaignId, uint256 _amount, bytes32[] calldata _proof)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        super.claimERC20(_campaignId, _amount, _proof);
+    }
+
+    // Secure wrapper for CampaignManagement.withdrawUnclaimedERC20
+    function withdrawUnclaimedERC20(uint256 _campaignId) public override whenNotPaused nonReentrant {
+        super.withdrawUnclaimedERC20(_campaignId);
+    }
+
+    // ---- NFT (multi-standard) settlement wrappers ----
+
+    function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        super.depositERC721Rewards(_campaignId, _token, _tokenIds);
+    }
+
+    function depositERC1155Rewards(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
     ) public override whenNotPaused nonReentrant {
-        super.claimReward(_campaignId);
+        super.depositERC1155Rewards(_campaignId, _token, _ids, _amounts);
+    }
+
+    function claimNFT(
+        uint256 _campaignId,
+        NFTStandard _standard,
+        address _token,
+        uint256 _tokenId,
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) public override whenNotPaused nonReentrant {
+        super.claimNFT(_campaignId, _standard, _token, _tokenId, _amount, _proof);
+    }
+
+    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        super.withdrawUnclaimedERC721(_campaignId, _token, _tokenIds);
+    }
+
+    function withdrawUnclaimedERC1155(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
+    ) public override whenNotPaused nonReentrant {
+        super.withdrawUnclaimedERC1155(_campaignId, _token, _ids, _amounts);
+    }
+
+    /// @dev Resolve the diamond inheritance of supportsInterface (AccessControl + ERC1155Holder).
+    function supportsInterface(bytes4 interfaceId) public view override(AccessControl, ERC1155Holder) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }

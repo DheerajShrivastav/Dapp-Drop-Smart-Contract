@@ -3,10 +3,14 @@ pragma solidity ^0.8.31;
 
 import {CampaignStorage} from "./CampaignStorage.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // This contract manages campaign creation, task addition, reward setting,
 // and campaign status updates. It also handles host role management.
 contract CampaignManagement is CampaignStorage {
+    using SafeERC20 for IERC20;
     // --- Modifiers ---
     // Override the onlyHost modifier from CampaignStorage
     modifier onlyHost(uint256 _campaignId) virtual override {
@@ -39,9 +43,7 @@ contract CampaignManagement is CampaignStorage {
      * Only callable by an account with DEFAULT_ADMIN_ROLE.
      * @param _account The address to revoke the HOST_ROLE from.
      */
-    function revokeHostRole(
-        address _account
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function revokeHostRole(address _account) public onlyRole(DEFAULT_ADMIN_ROLE) {
         _revokeRole(HOST_ROLE, _account);
     }
 
@@ -54,15 +56,13 @@ contract CampaignManagement is CampaignStorage {
      * @param _endTime The timestamp when the campaign officially ends.
      * @return The ID of the newly created campaign.
      */
-    function createCampaign(
-        string memory _name,
-        uint256 _startTime,
-        uint256 _endTime
-    ) public onlyRole(HOST_ROLE) returns (uint256) {
-        require(
-            bytes(_name).length > 0 && bytes(_name).length <= 200,
-            "Invalid name length"
-        );
+    function createCampaign(string memory _name, uint256 _startTime, uint256 _endTime)
+        public
+        virtual
+        onlyRole(HOST_ROLE)
+        returns (uint256)
+    {
+        require(bytes(_name).length > 0 && bytes(_name).length <= 200, "Invalid name length");
 
         // Rate Limiting
         _checkRateLimit(msg.sender);
@@ -83,19 +83,11 @@ contract CampaignManagement is CampaignStorage {
         newCampaign.status = CampaignStatus.Draft;
         newCampaign.createdAt = uint224(block.timestamp);
         newCampaign.totalParticipants = 0;
-        newCampaign.claimCount = 0;
-        // rewardConfig is initialized with default values (all false/zero)
 
         _hostCampaigns[msg.sender].push(campaignId);
         _userCampaignCount[msg.sender]++;
 
-        emit CampaignCreated(
-            campaignId,
-            msg.sender,
-            _name,
-            _startTime,
-            _endTime
-        );
+        emit CampaignCreated(campaignId, msg.sender, _name, _startTime, _endTime);
         return campaignId;
     }
 
@@ -115,11 +107,7 @@ contract CampaignManagement is CampaignStorage {
         bool _isOptional
     ) public onlyHost(_campaignId) {
         // Add security validation
-        require(
-            bytes(_description).length > 0 &&
-                bytes(_description).length <= 1000,
-            "Invalid description length"
-        );
+        require(bytes(_description).length > 0 && bytes(_description).length <= 1000, "Invalid description length");
 
         Campaign storage campaign = _campaigns[_campaignId];
 
@@ -129,21 +117,17 @@ contract CampaignManagement is CampaignStorage {
         // Limit tasks per campaign for security
         require(campaign.tasks.length < 20, "Too many tasks per campaign");
 
-        campaign.tasks.push(
-            CampaignTask({
-                taskType: _taskType,
-                description: _description,
-                verificationData: _verificationData,
-                isOptional: _isOptional
-            })
-        );
+        campaign.tasks
+            .push(
+                CampaignTask({
+                    taskType: _taskType,
+                    description: _description,
+                    verificationData: _verificationData,
+                    isOptional: _isOptional
+                })
+            );
 
-        emit TaskAddedToCampaign(
-            _campaignId,
-            campaign.tasks.length - 1,
-            _taskType,
-            _description
-        );
+        emit TaskAddedToCampaign(_campaignId, campaign.tasks.length - 1, _taskType, _description);
     }
 
     /**
@@ -165,11 +149,7 @@ contract CampaignManagement is CampaignStorage {
         if (length == 0 || length > MAX_BATCH_SIZE) {
             revert Web3Campaigns__BatchTooLarge();
         }
-        if (
-            _descriptions.length != length ||
-            _verificationData.length != length ||
-            _isOptional.length != length
-        ) {
+        if (_descriptions.length != length || _verificationData.length != length || _isOptional.length != length) {
             revert Web3Campaigns__ArrayLengthMismatch();
         }
 
@@ -182,26 +162,21 @@ contract CampaignManagement is CampaignStorage {
 
         for (uint256 i; i < length; ++i) {
             require(
-                bytes(_descriptions[i]).length > 0 &&
-                    bytes(_descriptions[i]).length <= 1000,
+                bytes(_descriptions[i]).length > 0 && bytes(_descriptions[i]).length <= 1000,
                 "Invalid description length"
             );
 
-            campaign.tasks.push(
-                CampaignTask({
-                    taskType: _taskTypes[i],
-                    description: _descriptions[i],
-                    verificationData: _verificationData[i],
-                    isOptional: _isOptional[i]
-                })
-            );
+            campaign.tasks
+                .push(
+                    CampaignTask({
+                        taskType: _taskTypes[i],
+                        description: _descriptions[i],
+                        verificationData: _verificationData[i],
+                        isOptional: _isOptional[i]
+                    })
+                );
 
-            emit TaskAddedToCampaign(
-                _campaignId,
-                campaign.tasks.length - 1,
-                _taskTypes[i],
-                _descriptions[i]
-            );
+            emit TaskAddedToCampaign(_campaignId, campaign.tasks.length - 1, _taskTypes[i], _descriptions[i]);
         }
 
         emit BatchTasksAdded(_campaignId, length);
@@ -212,57 +187,15 @@ contract CampaignManagement is CampaignStorage {
     // ============================================
 
     /**
-     * @notice Configure ERC20 token reward with fixed distribution
-     * @dev All participants who complete tasks receive the same amount
+     * @notice Configure the ERC20 reward token for a campaign (Merkle settlement model).
+     * @dev Distribution amounts (fixed / tiered / FCFS / sybil-filtered) are computed
+     *      OFF-CHAIN after the campaign ends and committed as a Merkle root via
+     *      setERC20MerkleRoot. This setter only records WHICH token will be paid; the
+     *      host must escrow it with fundCampaignERC20 before opening the campaign.
      * @param _campaignId Campaign ID
      * @param _tokenAddress ERC20 token contract address
-     * @param _amountPerParticipant Fixed amount each participant receives
      */
-    function setERC20RewardFixed(
-        uint256 _campaignId,
-        address _tokenAddress,
-        uint256 _amountPerParticipant
-    ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
-            revert Web3Campaigns__CampaignAlreadyStarted();
-        }
-        if (_tokenAddress == address(0)) {
-            revert Web3Campaigns__InvalidTokenAddress();
-        }
-        if (_amountPerParticipant == 0) {
-            revert Web3Campaigns__InvalidRewardAmount();
-        }
-
-        campaign.rewardConfig.erc20Reward.enabled = true;
-        campaign.rewardConfig.erc20Reward.tokenAddress = _tokenAddress;
-        campaign.rewardConfig.erc20Reward.distributionMode = DistributionMode.FIXED;
-        campaign.rewardConfig.erc20Reward.fixedAmount = _amountPerParticipant;
-        campaign.rewardConfig.rewardsConfigured = true;
-
-        emit ERC20RewardConfigured(
-            _campaignId,
-            _tokenAddress,
-            DistributionMode.FIXED,
-            _amountPerParticipant
-        );
-    }
-
-    /**
-     * @notice Configure ERC20 token reward with first-come-first-served distribution
-     * @dev Participants claim amountPerClaim from a totalPool until it is exhausted
-     * @param _campaignId Campaign ID
-     * @param _tokenAddress ERC20 token contract address
-     * @param _amountPerClaim Amount each participant receives per claim
-     * @param _totalPool Total token pool available for distribution
-     */
-    function setERC20RewardFCFS(
-        uint256 _campaignId,
-        address _tokenAddress,
-        uint256 _amountPerClaim,
-        uint256 _totalPool
-    ) public onlyHost(_campaignId) {
+    function configureERC20Reward(uint256 _campaignId, address _tokenAddress) public onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Draft) {
@@ -271,169 +204,274 @@ contract CampaignManagement is CampaignStorage {
         if (_tokenAddress == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
         }
-        if (_amountPerClaim == 0 || _totalPool == 0) {
-            revert Web3Campaigns__InvalidRewardAmount();
-        }
-        if (_amountPerClaim > _totalPool) {
-            revert Web3Campaigns__InvalidRewardAmount();
-        }
 
-        campaign.rewardConfig.erc20Reward.enabled = true;
-        campaign.rewardConfig.erc20Reward.tokenAddress = _tokenAddress;
-        campaign.rewardConfig.erc20Reward.distributionMode = DistributionMode.FCFS;
-        campaign.rewardConfig.erc20Reward.fixedAmount = _amountPerClaim;
-        campaign.rewardConfig.erc20Reward.totalPool = _totalPool;
-        campaign.rewardConfig.erc20Reward.distributedAmount = 0;
-        campaign.rewardConfig.rewardsConfigured = true;
+        _erc20RewardToken[_campaignId] = _tokenAddress;
 
-        emit ERC20RewardConfigured(
-            _campaignId,
-            _tokenAddress,
-            DistributionMode.FCFS,
-            _totalPool
-        );
+        emit ERC20RewardConfigured(_campaignId, _tokenAddress);
     }
 
     /**
-     * @notice Configure ERC20 token reward with tiered distribution
-     * @dev Different amounts based on claim rank (first N get X, next M get Y, etc.)
+     * @notice Escrow ERC20 reward tokens into the contract for a campaign.
+     * @dev Pulls tokens from the caller (host) into the contract. Allowed in Draft, Open,
+     *      or Ended (so the host can top up if the published allocation needs more than was
+     *      initially escrowed). The host must approve this contract first.
      * @param _campaignId Campaign ID
-     * @param _tokenAddress ERC20 token contract address
-     * @param _startRanks Array of starting ranks for each tier (1-indexed)
-     * @param _endRanks Array of ending ranks for each tier (inclusive)
-     * @param _amounts Amount per participant for each tier
-     * 
-     * Example: First 10 get 100 tokens, next 40 get 50 tokens, rest get 10
-     * _startRanks = [1, 11, 51]
-     * _endRanks = [10, 50, 1000]
-     * _amounts = [100e18, 50e18, 10e18]
+     * @param _amount Amount of the configured reward token to escrow
      */
-    function setERC20RewardTiered(
-        uint256 _campaignId,
-        address _tokenAddress,
-        uint256[] calldata _startRanks,
-        uint256[] calldata _endRanks,
-        uint256[] calldata _amounts
-    ) public onlyHost(_campaignId) {
+    function fundCampaignERC20(uint256 _campaignId, uint256 _amount) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
-            revert Web3Campaigns__CampaignAlreadyStarted();
-        }
-        if (_tokenAddress == address(0)) {
-            revert Web3Campaigns__InvalidTokenAddress();
-        }
-        if (_startRanks.length != _endRanks.length || _startRanks.length != _amounts.length) {
-            revert Web3Campaigns__InvalidTierConfiguration();
-        }
-        if (_startRanks.length == 0 || _startRanks.length > 10) {
-            revert Web3Campaigns__TooManyTiers();
-        }
 
-        // Validate tier configuration
-        for (uint256 i = 0; i < _startRanks.length; i++) {
-            if (_startRanks[i] == 0 || _startRanks[i] > _endRanks[i]) {
-                revert Web3Campaigns__InvalidTierConfiguration();
-            }
-            if (i > 0 && _startRanks[i] <= _endRanks[i - 1]) {
-                revert Web3Campaigns__InvalidTierConfiguration();
-            }
+        address token = _erc20RewardToken[_campaignId];
+        if (token == address(0)) {
+            revert Web3Campaigns__ERC20RewardNotConfigured();
         }
-
-        // Clear existing tiers for this campaign
-        delete _rewardTiers[_campaignId];
-
-        // Add new tiers
-        for (uint256 i = 0; i < _startRanks.length; i++) {
-            _rewardTiers[_campaignId].push(RewardTier({
-                startRank: _startRanks[i],
-                endRank: _endRanks[i],
-                amount: _amounts[i]
-            }));
+        if (_amount == 0) {
+            revert Web3Campaigns__InvalidAmount();
         }
-
-        campaign.rewardConfig.erc20Reward.enabled = true;
-        campaign.rewardConfig.erc20Reward.tokenAddress = _tokenAddress;
-        campaign.rewardConfig.erc20Reward.distributionMode = DistributionMode.TIERED;
-        campaign.rewardConfig.rewardsConfigured = true;
-
-        emit TieredRewardConfigured(_campaignId, _startRanks.length);
-        emit ERC20RewardConfigured(
-            _campaignId,
-            _tokenAddress,
-            DistributionMode.TIERED,
-            0
-        );
-    }
-
-    /**
-     * @notice Configure NFT reward for bulk distribution
-     * @dev NFTs are distributed FCFS from a pool
-     * @param _campaignId Campaign ID
-     * @param _tokenAddress ERC721 token contract address
-     * @param _maxPerParticipant Maximum NFTs per participant (usually 1)
-     */
-    function setNFTReward(
-        uint256 _campaignId,
-        address _tokenAddress,
-        uint256 _maxPerParticipant
-    ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
-            revert Web3Campaigns__CampaignAlreadyStarted();
-        }
-        if (_tokenAddress == address(0)) {
-            revert Web3Campaigns__InvalidTokenAddress();
-        }
-        if (_maxPerParticipant == 0) {
-            revert Web3Campaigns__InvalidRewardAmount();
-        }
-
-        campaign.rewardConfig.nftReward.enabled = true;
-        campaign.rewardConfig.nftReward.distributionMode = DistributionMode.FCFS;
-        campaign.rewardConfig.nftReward.pool.tokenAddress = _tokenAddress;
-        campaign.rewardConfig.nftReward.maxPerParticipant = _maxPerParticipant;
-        campaign.rewardConfig.rewardsConfigured = true;
-
-        emit NFTRewardConfigured(_campaignId, _tokenAddress, _maxPerParticipant);
-    }
-
-    /**
-     * @notice Add NFTs to the campaign's NFT pool for distribution
-     * @dev Host must approve contract for NFT transfers before calling
-     * @param _campaignId Campaign ID
-     * @param _tokenIds Array of token IDs to add to pool
-     */
-    function addNFTsToPool(
-        uint256 _campaignId,
-        uint256[] calldata _tokenIds
-    ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft && 
-            campaign.status != CampaignStatus.Open) {
+        if (
+            campaign.status != CampaignStatus.Draft && campaign.status != CampaignStatus.Open
+                && campaign.status != CampaignStatus.Ended
+        ) {
             revert Web3Campaigns__CampaignAlreadyEnded();
         }
-        if (!campaign.rewardConfig.nftReward.enabled) {
-            revert Web3Campaigns__NFTRewardNotEnabled();
-        }
-        if (_tokenIds.length == 0) {
-            revert Web3Campaigns__NoNFTsInPool();
-        }
-        require(_tokenIds.length <= 100, "Too many NFTs at once (max 100)");
 
-        // Effects: update state before external calls (CEI pattern)
-        for (uint256 i; i < _tokenIds.length; ++i) {
-            campaign.rewardConfig.nftReward.pool.tokenIds.push(_tokenIds[i]);
+        // Effects before interaction (escrow tracked on measured received amount would be
+        // ideal for fee-on-transfer tokens; standard tokens are assumed here).
+        _erc20Escrowed[_campaignId] += _amount;
+
+        IERC20(token).safeTransferFrom(msg.sender, address(this), _amount);
+
+        emit CampaignFundedERC20(_campaignId, msg.sender, _amount);
+    }
+
+    /**
+     * @notice Publish (or update) the ERC20 reward Merkle root for settlement.
+     * @dev Only after the campaign has Ended. The root commits to leaves of
+     *      keccak256(bytes.concat(keccak256(abi.encode(account, amount)))) — the
+     *      OpenZeppelin StandardMerkleTree format. Updatable while Ended (e.g. to fix an
+     *      allocation); frozen once the campaign is Closed.
+     * @param _campaignId Campaign ID
+     * @param _merkleRoot The settlement Merkle root
+     */
+    function setERC20MerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Ended) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (_erc20RewardToken[_campaignId] == address(0)) {
+            revert Web3Campaigns__ERC20RewardNotConfigured();
+        }
+        if (_merkleRoot == bytes32(0)) {
+            revert Web3Campaigns__MerkleRootNotSet();
         }
 
-        emit NFTsAddedToPool(_campaignId, _tokenIds.length);
+        _erc20MerkleRoot[_campaignId] = _merkleRoot;
+        emit ERC20MerkleRootSet(_campaignId, _merkleRoot);
+    }
 
-        // Interactions: external transfers after all state changes
-        IERC721 nft = IERC721(campaign.rewardConfig.nftReward.pool.tokenAddress);
-        for (uint256 i; i < _tokenIds.length; ++i) {
-            nft.transferFrom(msg.sender, address(this), _tokenIds[i]);
+    /**
+     * @notice Reclaim ERC20 escrow that was never claimed, after the grace period.
+     * @dev Callable by the host once the campaign is Closed and CLAIM_GRACE_PERIOD has
+     *      elapsed since closing. Transfers the unclaimed remainder back to the host.
+     * @param _campaignId Campaign ID
+     */
+    function withdrawUnclaimedERC20(uint256 _campaignId) public virtual onlyHost(_campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Closed) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (block.timestamp < _campaignClosedAt[_campaignId] + CLAIM_GRACE_PERIOD) {
+            revert Web3Campaigns__GracePeriodActive();
+        }
+        if (_erc20Swept[_campaignId]) {
+            revert Web3Campaigns__AlreadySwept();
+        }
+
+        uint256 remaining = _erc20Escrowed[_campaignId] - _erc20Distributed[_campaignId];
+        if (remaining == 0) {
+            revert Web3Campaigns__NothingToSweep();
+        }
+
+        _erc20Swept[_campaignId] = true;
+
+        IERC20(_erc20RewardToken[_campaignId]).safeTransfer(campaign.host, remaining);
+
+        emit UnclaimedERC20Swept(_campaignId, campaign.host, remaining);
+    }
+
+    /**
+     * @notice Escrow ERC721 NFTs into the campaign for later Merkle-settled distribution.
+     * @dev Pulls each tokenId from the host into the contract via safeTransferFrom and records
+     *      per-campaign ownership (so one campaign's settlement cannot drain another's escrow).
+     *      Allowed in Draft/Open/Ended. The host must approve this contract first.
+     * @param _campaignId Campaign ID
+     * @param _token ERC721 contract address
+     * @param _tokenIds Token IDs to escrow (max 100 per call)
+     */
+    function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        virtual
+        onlyHost(_campaignId)
+    {
+        _requireFundingStatus(_campaignId);
+        if (_token == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        uint256 len = _tokenIds.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = true;
+        }
+
+        emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC721, len);
+
+        // Interactions after effects (CEI)
+        for (uint256 i; i < len; ++i) {
+            IERC721(_token).safeTransferFrom(msg.sender, address(this), _tokenIds[i]);
+        }
+    }
+
+    /**
+     * @notice Escrow ERC1155 tokens into the campaign for later Merkle-settled distribution.
+     * @param _campaignId Campaign ID
+     * @param _token ERC1155 contract address
+     * @param _ids Token ids
+     * @param _amounts Amounts per id (parallel array)
+     */
+    function depositERC1155Rewards(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
+    ) public virtual onlyHost(_campaignId) {
+        _requireFundingStatus(_campaignId);
+        if (_token == address(0)) {
+            revert Web3Campaigns__InvalidTokenAddress();
+        }
+        uint256 len = _ids.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (_amounts.length != len) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            if (_amounts[i] == 0) {
+                revert Web3Campaigns__InvalidAmount();
+            }
+            _escrowedERC1155[_campaignId][_token][_ids[i]] += _amounts[i];
+        }
+
+        emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC1155, len);
+
+        IERC1155(_token).safeBatchTransferFrom(msg.sender, address(this), _ids, _amounts, "");
+    }
+
+    /**
+     * @notice Publish (or update) the NFT reward Merkle root for settlement.
+     * @dev Only after the campaign has Ended. Leaf format:
+     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
+     *      Updatable while Ended, frozen at Closed.
+     * @param _campaignId Campaign ID
+     * @param _merkleRoot The settlement Merkle root
+     */
+    function setNFTMerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Ended) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (_merkleRoot == bytes32(0)) {
+            revert Web3Campaigns__MerkleRootNotSet();
+        }
+
+        _nftMerkleRoot[_campaignId] = _merkleRoot;
+        emit NFTMerkleRootSet(_campaignId, _merkleRoot);
+    }
+
+    /**
+     * @notice Reclaim still-escrowed ERC721 NFTs after the grace period (unclaimed by winners).
+     * @dev Campaign must be Closed and CLAIM_GRACE_PERIOD elapsed. Only tokenIds still escrowed
+     *      (not claimed, not from another campaign) can be reclaimed.
+     */
+    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+        public
+        virtual
+        onlyHost(_campaignId)
+    {
+        _requireSweepable(_campaignId);
+        uint256 len = _tokenIds.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            if (!_escrowedERC721[_campaignId][_token][_tokenIds[i]]) {
+                revert Web3Campaigns__NFTNotEscrowed();
+            }
+            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = false;
+        }
+
+        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC721, len);
+
+        address host = _campaigns[_campaignId].host;
+        for (uint256 i; i < len; ++i) {
+            IERC721(_token).safeTransferFrom(address(this), host, _tokenIds[i]);
+        }
+    }
+
+    /**
+     * @notice Reclaim still-escrowed ERC1155 balances after the grace period.
+     */
+    function withdrawUnclaimedERC1155(
+        uint256 _campaignId,
+        address _token,
+        uint256[] calldata _ids,
+        uint256[] calldata _amounts
+    ) public virtual onlyHost(_campaignId) {
+        _requireSweepable(_campaignId);
+        uint256 len = _ids.length;
+        if (len == 0 || len > 100) {
+            revert Web3Campaigns__BatchTooLarge();
+        }
+        if (_amounts.length != len) {
+            revert Web3Campaigns__ArrayLengthMismatch();
+        }
+
+        for (uint256 i; i < len; ++i) {
+            uint256 held = _escrowedERC1155[_campaignId][_token][_ids[i]];
+            if (_amounts[i] == 0 || _amounts[i] > held) {
+                revert Web3Campaigns__NFTNotEscrowed();
+            }
+            _escrowedERC1155[_campaignId][_token][_ids[i]] = held - _amounts[i];
+        }
+
+        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC1155, len);
+
+        IERC1155(_token).safeBatchTransferFrom(address(this), _campaigns[_campaignId].host, _ids, _amounts, "");
+    }
+
+    /// @dev Shared status guard for reward deposits (Draft/Open/Ended top-up).
+    function _requireFundingStatus(uint256 _campaignId) internal view {
+        CampaignStatus s = _campaigns[_campaignId].status;
+        if (s != CampaignStatus.Draft && s != CampaignStatus.Open && s != CampaignStatus.Ended) {
+            revert Web3Campaigns__CampaignAlreadyEnded();
+        }
+    }
+
+    /// @dev Shared guard for unclaimed sweeps: Closed + grace elapsed.
+    function _requireSweepable(uint256 _campaignId) internal view {
+        if (_campaigns[_campaignId].status != CampaignStatus.Closed) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (block.timestamp < _campaignClosedAt[_campaignId] + CLAIM_GRACE_PERIOD) {
+            revert Web3Campaigns__GracePeriodActive();
         }
     }
 
@@ -444,54 +482,29 @@ contract CampaignManagement is CampaignStorage {
      * @param _description Description of the reward
      * @param _metadata Additional metadata (can be JSON encoded)
      */
-    function setOffChainReward(
-        uint256 _campaignId,
-        string memory _description,
-        bytes memory _metadata
-    ) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-        
-        if (campaign.status != CampaignStatus.Draft) {
+    function setOffChainReward(uint256 _campaignId, string memory _description, bytes memory _metadata)
+        public
+        onlyHost(_campaignId)
+    {
+        if (_campaigns[_campaignId].status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
         require(bytes(_description).length > 0, "Description required");
         require(bytes(_description).length <= 500, "Description too long");
 
-        campaign.rewardConfig.offChainReward.enabled = true;
-        campaign.rewardConfig.offChainReward.rewardDescription = _description;
-        campaign.rewardConfig.offChainReward.rewardMetadata = _metadata;
-        campaign.rewardConfig.rewardsConfigured = true;
+        OffChainReward storage offChain = _offChainReward[_campaignId];
+        offChain.enabled = true;
+        offChain.rewardDescription = _description;
+        offChain.rewardMetadata = _metadata;
 
         emit OffChainRewardConfigured(_campaignId, _description);
-    }
-
-    /**
-     * @dev Legacy function for backward compatibility - sets ERC20 fixed reward.
-     * Use setERC20RewardFixed, setERC20RewardTiered, setNFTReward instead.
-     */
-    function setCampaignReward(
-        uint256 _campaignId,
-        RewardType _rewardType,
-        address _tokenAddress,
-        uint256 _amountOrTokenId
-    ) public onlyHost(_campaignId) {
-        if (_rewardType == RewardType.ERC20) {
-            setERC20RewardFixed(_campaignId, _tokenAddress, _amountOrTokenId);
-        } else if (_rewardType == RewardType.ERC721_SINGLE || _rewardType == RewardType.ERC721_BATCH) {
-            setNFTReward(_campaignId, _tokenAddress, 1);
-        } else if (_rewardType == RewardType.OTHER) {
-            setOffChainReward(_campaignId, "Legacy off-chain reward", "");
-        }
-        // For NONE, do nothing
     }
 
     /**
      * @dev Sets the campaign status to Open. Can only be called by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function openCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function openCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
         if (campaign.status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
@@ -506,15 +519,15 @@ contract CampaignManagement is CampaignStorage {
      * This allows claims to begin.
      * @param _campaignId The ID of the campaign.
      */
-    function endCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function endCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Open) {
             revert Web3Campaigns__CampaignNotOpen();
         }
-        // Allow ending before endTime if host decides to conclude early
+        // A campaign can only be ended at or after its scheduled endTime. Early
+        // conclusion is intentionally NOT supported, so that participants always
+        // have the full advertised window to complete tasks.
         if (block.timestamp < campaign.endTime) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }
@@ -527,9 +540,7 @@ contract CampaignManagement is CampaignStorage {
      * @dev Closes the campaign, preventing further claims. Only callable by the host.
      * @param _campaignId The ID of the campaign.
      */
-    function closeCampaign(
-        uint256 _campaignId
-    ) public virtual onlyHost(_campaignId) {
+    function closeCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.status != CampaignStatus.Ended) {
@@ -537,6 +548,7 @@ contract CampaignManagement is CampaignStorage {
         }
 
         campaign.status = CampaignStatus.Closed;
+        _campaignClosedAt[_campaignId] = uint64(block.timestamp); // start of the unclaimed-sweep grace window
         emit CampaignStatusUpdated(_campaignId, CampaignStatus.Closed);
     }
 }
