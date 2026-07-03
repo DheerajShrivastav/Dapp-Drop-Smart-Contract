@@ -299,4 +299,46 @@ contract SignatureVerificationTest is Test {
             campaignId, participants, taskIndices, completedFlags, deadlines, signatures
         );
     }
+
+    /*//////////////////////////////////////////////////////////////
+                    SIGNER AUTHORITY / SELF-ASSERTION LOCK
+    //////////////////////////////////////////////////////////////*/
+
+    function test_CompleteTask_SelfAssertPreAttestationWorks() public {
+        uint256 campaignId = _openCampaignWithSocialTask();
+
+        vm.prank(participant1);
+        campaigns.completeTask(campaignId, 0);
+
+        assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
+    }
+
+    function test_CompleteTask_AfterSignerRevoke_RevertsWithTaskManagedBySignature() public {
+        uint256 campaignId = _openCampaignWithSocialTask();
+        uint256 deadline = block.timestamp + 1 hours;
+
+        // Signer attests completed=true
+        bytes memory sig1 = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig1);
+        assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
+
+        // Signer revokes: attests completed=false
+        bytes memory sig2 = _signAttestation(1, address(campaigns), campaignId, participant1, 0, false, 2, deadline);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, false, deadline, sig2);
+        assertFalse(campaigns.hasCompletedTask(campaignId, participant1, 0));
+
+        // Participant must not be able to self-assert the task back to completed
+        vm.prank(participant1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__TaskManagedBySignature.selector);
+        campaigns.completeTask(campaignId, 0);
+    }
+
+    function test_VerifySignature_RevertsForZeroAddressParticipant() public {
+        uint256 campaignId = _openCampaignWithSocialTask();
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bytes memory sig = _signAttestation(1, address(campaigns), campaignId, address(0), 0, true, 1, deadline);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__ZeroAddress.selector);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, address(0), 0, true, deadline, sig);
+    }
 }

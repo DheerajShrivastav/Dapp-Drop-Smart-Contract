@@ -47,6 +47,9 @@ contract ParticipantManagement is CampaignStorage {
         if (_participantTaskCompletion[msg.sender][_campaignId][_taskIndex]) {
             revert Web3Campaigns__TaskAlreadyCompleted();
         }
+        if (_taskAttestationVersion[msg.sender][_campaignId][_taskIndex] > 0) {
+            revert Web3Campaigns__TaskManagedBySignature();
+        }
 
         // SECURITY CHECKS
         require(_suspiciousActivityScore[msg.sender] < MAX_SUSPICIOUS_SCORE, "Account flagged for suspicious activity");
@@ -140,6 +143,9 @@ contract ParticipantManagement is CampaignStorage {
         uint256 _deadline,
         bytes calldata _signature
     ) public virtual {
+        if (_participant == address(0)) {
+            revert Web3Campaigns__ZeroAddress();
+        }
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.id == 0) {

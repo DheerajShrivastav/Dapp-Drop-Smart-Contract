@@ -53,6 +53,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();
+    error Web3Campaigns__TaskManagedBySignature();
+    error Web3Campaigns__ZeroAddress();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
