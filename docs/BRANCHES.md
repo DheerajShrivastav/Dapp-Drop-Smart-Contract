@@ -1,14 +1,16 @@
 # Branch Topology — Dapp-Drop
 
-**Active work:** `feature/v0.3-security-hardening` (forked from `dev`) holds the v0.3 escrow + Merkle settlement rewrite (Stage A `85cf83d`, Stage B1 `24f472a`). This is where current development happens; `dev` remains the prior source of truth until v0.3 merges back.
+**Active work:** `feature/phase2-signature-verification` (forked from `dev` post-v0.3 merge) holds Phase 2 — EIP-712 signed attestations replacing host-tx task verification. 62 tests passing; not yet merged to `dev`.
+
+`feature/v0.3-security-hardening` (Stage A + B1–B3) merged to `dev` as PR #1 (`fd28f27`). `dev` is now VERSION 0.3.0.
 
 ---
 
 Four original branches, two independent dev lines from common ancestor `563f9f5` (master baseline / "security audit plan").
 
-- **`dev` = SOURCE OF TRUTH.** Most advanced: VERSION 0.2.0, Solidity 0.8.31, full flexible reward system + batch ops (`batchAddTasks`, `batchVerifyTaskCompletion`) + admin `withdrawETH`. Strict superset of `feature/flexible-reward-system`. Use this branch for all work.
-- **`origin/master`** — old baseline. Single flat `CampaignReward`. `dev` adds +841 lines of multi-asset/multi-mode rewards on top (see [REWARD_SYSTEM.md](REWARD_SYSTEM.md)).
-- **`origin/feature/flexible-reward-system`** — OBSOLETE / fully merged. It is `dev`'s direct parent (tip `2fa8ea3`); `dev` = this branch + 1 refinement commit (`1e74190`). Zero commits `dev` lacks. Safe to delete.
+- **`dev` = SOURCE OF TRUTH.** VERSION 0.3.0, Solidity 0.8.31. Full escrow + Merkle settlement rewrite merged (PR #1). Use this branch as the base for all new work.
+- **`origin/master`** — old baseline. Single flat `CampaignReward`. `dev` is a strict superset.
+- **`origin/feature/flexible-reward-system`** — OBSOLETE / fully merged into `dev`. Safe to delete.
 - **`origin/feature/single-tx-campaign-setup`** — UNMERGED, genuinely divergent (5 unique commits, never received the flexible reward system). Holds **one** unique feature not on `dev`:
   ```solidity
   createCampaignWithTasksAndReward(
