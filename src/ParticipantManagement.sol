@@ -255,10 +255,16 @@ contract ParticipantManagement is CampaignStorage {
         if (campaign.id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        // Claims open once the campaign has Ended; they remain open after Closed until the
-        // host sweeps unclaimed funds (guarded by _erc20Swept in the transfer accounting).
+        // Claims open once the campaign has Ended; they remain open after Closed until the host
+        // sweeps unclaimed funds. Once swept, this campaign's remaining escrow has been returned to
+        // the host, so further claims must be blocked — otherwise, because ERC20 escrow is a single
+        // commingled token balance (not earmarked per campaign like NFTs), a late claim would be
+        // paid out of OTHER campaigns' escrow, leaving them underwater.
         if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
             revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (_erc20Swept[_campaignId]) {
+            revert Web3Campaigns__AlreadySwept();
         }
 
         bytes32 root = _erc20MerkleRoot[_campaignId];

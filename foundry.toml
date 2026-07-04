@@ -12,3 +12,10 @@ optimizer = true
 optimizer_runs = 200
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
+[invariant]
+runs = 128
+depth = 30
+# Handler actions may revert on bounded edge cases (e.g. a claim after sweep); a reverting call is
+# discarded and ghosts stay consistent, so we don't fail the run on reverts.
+fail_on_revert = false
+
