@@ -2,16 +2,21 @@
 pragma solidity ^0.8.31;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
 // This contract defines all the shared data structures and state variables
 // for the Web3Campaigns system. Other logic contracts will inherit from it.
-abstract contract CampaignStorage is AccessControl {
+abstract contract CampaignStorage is AccessControl, EIP712 {
+    constructor() EIP712("Web3Campaigns", "1") {}
+
     // --- Roles ---
     bytes32 public constant HOST_ROLE = keccak256("HOST_ROLE");
     // Emergency admin role
     bytes32 public constant EMERGENCY_ADMIN = keccak256("EMERGENCY_ADMIN");
     // Moderator role: can flag accounts for suspicious activity
     bytes32 public constant MODERATOR_ROLE = keccak256("MODERATOR_ROLE");
+    // Signer role: backend keys authorized to sign off-chain task-completion attestations
+    bytes32 public constant SIGNER_ROLE = keccak256("SIGNER_ROLE");
 
     // --- Custom Errors ---
     error Web3Campaigns__CampaignNotFound();
@@ -45,6 +50,11 @@ abstract contract CampaignStorage is AccessControl {
     error Web3Campaigns__NothingToSweep();
     error Web3Campaigns__InvalidAmount();
     error Web3Campaigns__NFTNotEscrowed();
+    // Signature Verification Errors
+    error Web3Campaigns__SignatureExpired();
+    error Web3Campaigns__InvalidSigner();
+    error Web3Campaigns__TaskManagedBySignature();
+    error Web3Campaigns__ZeroAddress();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -56,6 +66,15 @@ abstract contract CampaignStorage is AccessControl {
     uint256 public constant MAX_BATCH_SIZE = 50;
     // Grace window after a campaign is Closed before the host may sweep unclaimed escrow
     uint256 public constant CLAIM_GRACE_PERIOD = 30 days;
+
+    // EIP-712 typehash for a signed task-completion attestation. `version` is the per
+    // (participant, campaign, task) attestation counter — it doubles as the leaf's replay
+    // guard (a used signature's version can never be reused) AND lets a signer issue a fresh
+    // attestation later to update/reverify a completion (e.g. flip completed back to false,
+    // or re-affirm it), since each new attestation just targets the next version.
+    bytes32 public constant TASK_ATTESTATION_TYPEHASH = keccak256(
+        "TaskAttestation(uint256 campaignId,address participant,uint256 taskIndex,bool completed,uint256 version,uint256 deadline)"
+    );
     // --- Enums ---
     enum CampaignStatus {
         Draft, // Campaign created, host is adding tasks
@@ -127,6 +146,10 @@ abstract contract CampaignStorage is AccessControl {
     // Off-chain reward config (informational; no on-chain payout)
     mapping(uint256 => OffChainReward) internal _offChainReward;
 
+    // Signed task-completion attestation state: participant => campaignId => taskIndex => version.
+    // 0 means no attestation has ever been applied; each accepted signature bumps this by 1.
+    mapping(address => mapping(uint256 => mapping(uint256 => uint256))) internal _taskAttestationVersion;
+
     // --- Merkle settlement state (post-campaign ERC20 reward distribution) ---
     // Rewards are escrowed in the contract; after the campaign ends, the host publishes a
     // Merkle root of (account => amount) allocations computed off-chain, and participants
@@ -169,6 +192,14 @@ abstract contract CampaignStorage is AccessControl {
     event OffChainRewardConfigured(uint256 indexed campaignId, string description);
     event BatchTasksVerified(uint256 indexed campaignId, uint256 count);
     event BatchTasksAdded(uint256 indexed campaignId, uint256 count);
+    event TaskVerifiedWithSignature(
+        uint256 indexed campaignId,
+        address indexed participant,
+        uint256 indexed taskIndex,
+        bool completed,
+        uint256 version,
+        address signer
+    );
 
     // Merkle Settlement Events
     event ERC20RewardConfigured(uint256 indexed campaignId, address indexed token);

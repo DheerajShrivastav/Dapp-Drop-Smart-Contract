@@ -59,6 +59,24 @@ contract CampaignViewFunctions is CampaignStorage {
     }
 
     /**
+     * @notice Get the current signed-attestation version for a participant's task.
+     * @dev A signer's next attestation for this (participant, campaign, task) must target
+     *      version + 1. Off-chain signing services should read this before constructing a
+     *      new TaskAttestation to sign.
+     * @param _campaignId The ID of the campaign.
+     * @param _participant The address the attestation is about.
+     * @param _taskIndex The index of the task.
+     * @return The current version (0 if no attestation has ever been applied).
+     */
+    function getTaskAttestationVersion(uint256 _campaignId, address _participant, uint256 _taskIndex)
+        external
+        view
+        returns (uint256)
+    {
+        return _taskAttestationVersion[_participant][_campaignId][_taskIndex];
+    }
+
+    /**
      * @dev Returns the total number of campaigns created.
      * @return The current value of _campaignCounter.
      */

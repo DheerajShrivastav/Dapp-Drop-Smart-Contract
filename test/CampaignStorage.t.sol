@@ -22,6 +22,43 @@ contract CampaignLifecycleTest is Test {
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
     bytes32 public constant HOST_ROLE = keccak256("HOST_ROLE");
 
+    // --- EIP-712 signing helpers (mirrors CampaignStorage's TASK_ATTESTATION_TYPEHASH) ---
+    bytes32 constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 constant TASK_ATTESTATION_TYPEHASH = keccak256(
+        "TaskAttestation(uint256 campaignId,address participant,uint256 taskIndex,bool completed,uint256 version,uint256 deadline)"
+    );
+
+    function _domainSeparator(address verifyingContract) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                EIP712_DOMAIN_TYPEHASH,
+                keccak256(bytes("Web3Campaigns")),
+                keccak256(bytes("1")),
+                block.chainid,
+                verifyingContract
+            )
+        );
+    }
+
+    function _signAttestation(
+        uint256 signerPk,
+        address verifyingContract,
+        uint256 campaignId,
+        address participant,
+        uint256 taskIndex,
+        bool completed,
+        uint256 version,
+        uint256 deadline
+    ) internal view returns (bytes memory) {
+        bytes32 structHash = keccak256(
+            abi.encode(TASK_ATTESTATION_TYPEHASH, campaignId, participant, taskIndex, completed, version, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(verifyingContract), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     // Realistic time offsets
     uint256 constant START_OFFSET = 1 days;
     uint256 constant CAMPAIGN_DURATION = 7 days;
@@ -214,7 +251,7 @@ contract CampaignLifecycleTest is Test {
         assertEq(campaign.tasks.length, 3);
     }
 
-    function test_BatchVerifyTaskCompletion_Success() public {
+    function test_BatchVerifyTaskCompletionWithSignatures_Success() public {
         uint256 startTime = block.timestamp + START_OFFSET;
         uint256 endTime = startTime + CAMPAIGN_DURATION;
 
@@ -229,7 +266,7 @@ contract CampaignLifecycleTest is Test {
         vm.prank(host1);
         campaigns.openCampaign(campaignId);
 
-        // Batch verify for two participants
+        // Batch verify for two participants, signed by the deployer (holds SIGNER_ROLE, pk=1)
         address[] memory participants = new address[](2);
         participants[0] = participant1;
         participants[1] = participant2;
@@ -238,8 +275,22 @@ contract CampaignLifecycleTest is Test {
         taskIndices[0] = 0;
         taskIndices[1] = 0;
 
-        vm.prank(host1);
-        campaigns.batchVerifyTaskCompletion(campaignId, participants, taskIndices);
+        bool[] memory completedFlags = new bool[](2);
+        completedFlags[0] = true;
+        completedFlags[1] = true;
+
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256[] memory deadlines = new uint256[](2);
+        deadlines[0] = deadline;
+        deadlines[1] = deadline;
+
+        bytes[] memory signatures = new bytes[](2);
+        signatures[0] = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+        signatures[1] = _signAttestation(1, address(campaigns), campaignId, participant2, 0, true, 1, deadline);
+
+        campaigns.batchVerifyTaskCompletionWithSignatures(
+            campaignId, participants, taskIndices, completedFlags, deadlines, signatures
+        );
 
         assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
         assertTrue(campaigns.hasCompletedTask(campaignId, participant2, 0));

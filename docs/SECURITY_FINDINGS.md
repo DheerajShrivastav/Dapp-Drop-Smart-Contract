@@ -1,6 +1,6 @@
 # Security & Correctness Findings — Web3Campaigns
 
-> Original code-audit findings, annotated with current status on `feature/v0.3-security-hardening`. Verify line numbers before acting.
+> Original code-audit findings, annotated with current status through Phase 2 (`feature/phase2-signature-verification`). Verify line numbers before acting.
 
 ## Status legend
 ✅ FIXED · 🟡 OPEN · 🔵 INTENTIONAL (founder decision) · ⏳ ADDRESSED IN PROGRESS
@@ -15,7 +15,7 @@
 3. ✅ **Silent zero-reward claims** (FCFS/TIERED/pool-exhaustion) — **FIXED** for ERC20 (B1) and NFT (B2): only winners with a valid proof can claim; `InsufficientEscrow`/`NFTNotEscrowed` revert rather than silently paying 0. Legacy NFT pool path removed in B2.
 4. ✅ **On-chain hold verification broken** (52-byte vs 64-byte `abi.decode`) — **FIXED in Stage A.** `completeTask` now requires the correct 64-byte `abi.encode(address,uint256)` for `ONCHAIN_HOLD_ERC20/721`. (Tests in `test/StageAFixes.t.sol`.)
 5. ✅ **Claim-rank front-running** (TIERED/FCFS earliest-claimer advantage) — **FIXED** for ERC20 (B1) and NFT (B2): allocations are predetermined in the Merkle tree, not by claim order.
-6. ✅ **`ONCHAIN_TX` task hard-reverts / bricks campaigns** — **FIXED in Stage A.** No longer reverts in `completeTask` (now `NotSelfVerifiable`); is host-verifiable via `verifyTaskCompletion`/`batchVerifyTaskCompletion`. `ONCHAIN_HOLD_*` remain self-verified and host-unoverridable.
+6. ✅ **`ONCHAIN_TX` task hard-reverts / bricks campaigns** — **FIXED in Stage A.** No longer reverts in `completeTask` (now `NotSelfVerifiable`); is settled via `verifyTaskCompletionWithSignature`/`batchVerifyTaskCompletionWithSignatures` (Phase 2 — replaced the old host-tx `verifyTaskCompletion`/`batchVerifyTaskCompletion`). `ONCHAIN_HOLD_*` remain self-verified and signer-unoverridable.
 
 ## LOW / INFORMATIONAL
 
@@ -27,7 +27,14 @@
 12. 🟡 `== 0` existence checks (id-sentinel `incorrect-equality`) — low risk by design; unchanged.
 
 ## Not yet implemented (deferred)
-MAX_PARTICIPANTS enforcement, JOIN_COOLDOWN, cancel-campaign/refund, signature-based off-chain task verification (Phase 2), protocol fee, sybil gating, gasless claims. `.code.length` token checks on `configureERC20Reward`.
+MAX_PARTICIPANTS enforcement, JOIN_COOLDOWN, cancel-campaign/refund, protocol fee, N-of-M threshold signing, sybil gating, gasless claims. `.code.length` token checks on `configureERC20Reward`.
+
+## New surface added in Phase 2 (review focus)
+- **`SIGNER_ROLE` key compromise** — a compromised signer can mint arbitrary task completions until revoked via `revokeRole(SIGNER_ROLE, ...)`. There is no on-chain rate limit or threshold; single-signer by design. Rotate quickly if compromised. See [TASK_VERIFICATION.md](TASK_VERIFICATION.md).
+- **Zero-address participant guard** — `verifyTaskCompletionWithSignature` explicitly rejects `_participant == address(0)` (`Web3Campaigns__ZeroAddress`).
+- **Signature replay/update model** — per-`(participant,campaign,task)` version counter; replay is impossible because the accepted version is advanced atomically. A signer *can* flip `completed` back to `false` by signing the next version — intentional (correction/re-verification path), but means partial completion counts may decrease for any off-chain aggregation that queries task state.
+- **`completeTask` guard** — if any attestation has ever been accepted for a `(participant, campaign, task)` triple (`version > 0`), `completeTask` reverts `TaskManagedBySignature` to prevent mixing self-assertion and signer-controlled state.
+- **Domain binding** — `verifyingContract` is encoded in the EIP-712 domain, so a signature produced for one deployment cannot validate against another. Tested in `test/SignatureVerification.t.sol`.
 
 ## New surface added in B1–B2 (review focus)
 - Escrow accounting (`_erc20Escrowed`/`_erc20Distributed`) assumes **standard (non-fee-on-transfer) ERC20**; fee-on-transfer tokens would under-fund escrow. Document/whitelist or measure received balance if support is needed.
