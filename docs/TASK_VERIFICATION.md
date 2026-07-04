@@ -1,6 +1,6 @@
 # Task Verification — Web3Campaigns
 
-> Phase 2 (`feature/phase2-signature-verification`, forked from `dev` post-v0.3). Replaces host-tx verification of off-chain tasks with EIP-712 signed attestations.
+> Phase 2 (merged to `dev` via PR #2). Replaces host-tx verification of off-chain tasks with EIP-712 signed attestations.
 
 ## Model: signed attestations, not host transactions
 
@@ -47,6 +47,6 @@ A backend signing service should, per attestation:
 
 ## Open items / caveats
 - **Trust model**: this is signer-trusted, not trustless. A compromised `SIGNER_ROLE` key can mint arbitrary completions until revoked. No threshold (N-of-M) signing yet — single-signer by design for this phase; see `docs/NEXT_STEPS.md` if that needs revisiting.
-- **Contract size**: `Web3Campaigns` is now 21.1KB runtime (24.576KB limit) — 3.4KB headroom left. Future features should watch `forge build --sizes`.
+- **Contract size**: `Web3Campaigns` is now 21.2KB runtime (24.576KB limit) — ~3.3KB headroom left. Future features should watch `forge build --sizes`.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md), [TEST_AND_BUILD.md](TEST_AND_BUILD.md).

@@ -312,4 +312,39 @@ contract MerkleSettlementTest is Test {
         vm.expectRevert(CampaignStorage.Web3Campaigns__AlreadySwept.selector);
         campaigns.withdrawUnclaimedERC20(id);
     }
+
+    /// @notice Regression for the cross-campaign drain the escrow-solvency invariant found:
+    /// once a campaign's unclaimed escrow is swept back to the host, a late claim on that campaign
+    /// must be blocked. Otherwise it would be paid out of a DIFFERENT campaign's commingled escrow.
+    function test_ClaimERC20_BlockedAfterSweep_NoCrossCampaignDrain() public {
+        uint256 amount = 100 ether;
+
+        // Campaign A: participant1 allocated 100, funded 100 (never claimed).
+        uint256 idA = _endedCampaignWithRoot(_leaf(participant1, amount), amount);
+        // Campaign B: participant2 allocated 100, funded 100 — shares the same token pool.
+        uint256 idB = _endedCampaignWithRoot(_leaf(participant2, amount), amount);
+
+        assertEq(token.balanceOf(address(campaigns)), 200 ether);
+
+        // Sweep A after grace: host reclaims A's unclaimed 100; only B's escrow remains in the pool.
+        vm.prank(host1);
+        campaigns.closeCampaign(idA);
+        vm.warp(block.timestamp + GRACE + 1);
+        vm.prank(host1);
+        campaigns.withdrawUnclaimedERC20(idA);
+        assertEq(token.balanceOf(address(campaigns)), 100 ether);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        // participant1's late claim on the swept campaign must revert — not drain B's escrow.
+        vm.prank(participant1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__AlreadySwept.selector);
+        campaigns.claimERC20(idA, amount, proof);
+
+        // Campaign B's participant can still claim its full, untouched allocation.
+        vm.prank(participant2);
+        campaigns.claimERC20(idB, amount, proof);
+        assertEq(token.balanceOf(participant2), amount);
+        assertEq(token.balanceOf(address(campaigns)), 0);
+    }
 }
