@@ -1,6 +1,6 @@
 # Reward System — Web3Campaigns
 
-> As of `feature/v0.3-security-hardening`. Both ERC20 (B1) and NFT (B2) use escrow + post-campaign Merkle settlement. The legacy live-distribution system was deleted in B3.
+> As of `feature/invariant-tests` (forked from `dev` post-Phase-2 merge). Both ERC20 (B1) and NFT (B2) use escrow + post-campaign Merkle settlement. The legacy live-distribution system was deleted in B3. **Security note**: `claimERC20` now rejects claims on swept campaigns (`AlreadySwept`) — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3.
 
 ## Model: escrow + post-campaign Merkle settlement
 
@@ -20,7 +20,7 @@ Host flow (CampaignManagement.sol):
 5. `withdrawUnclaimedERC20(id)` — after Closed + `CLAIM_GRACE_PERIOD` (30 days); sweeps `escrowed - distributed` to host; single-sweep guarded by `_erc20Swept`.
 
 Participant claim (ParticipantManagement.sol):
-- `claimERC20(id, amount, proof)` — status Ended or Closed; requires root set; one claim per account (`_erc20SettlementClaimed`); leaf is the **OZ StandardMerkleTree** format `keccak256(bytes.concat(keccak256(abi.encode(account, amount))))`; verified with OZ `MerkleProof.verify`; escrow-accounted (`InsufficientEscrow` if `distributed + amount > escrowed`); pays via `safeTransfer` from escrow. `nonReentrant + whenNotPaused` (Web3Campaigns wrapper).
+- `claimERC20(id, amount, proof)` — status Ended or Closed; **reverts `AlreadySwept` if the campaign's unclaimed escrow has already been swept back to the host** (prevents a late claim from draining another campaign's commingled ERC20 escrow — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3); requires root set; one claim per account (`_erc20SettlementClaimed`); leaf is the **OZ StandardMerkleTree** format `keccak256(bytes.concat(keccak256(abi.encode(account, amount))))`; verified with OZ `MerkleProof.verify`; escrow-accounted (`InsufficientEscrow` if `distributed + amount > escrowed`); pays via `safeTransfer` from escrow. `nonReentrant + whenNotPaused` (Web3Campaigns wrapper).
 - Off-chain tooling must build the tree with `@openzeppelin/merkle-tree` using leaf encoding `["address","uint256"]` to match.
 
 Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`.

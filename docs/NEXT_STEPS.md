@@ -13,7 +13,7 @@
 - [ ] **Repo-wide `forge fmt`.** Repo does not pass `forge fmt --check` (pre-existing). Do a single formatting pass so CI's `forge fmt --check` goes green — as its own commit to keep diffs reviewable.
 - [ ] **`grantHostRole` is intentionally open.** Revisit when adding the staked/curated hosting model (founder decision to leave open for now).
 - [ ] **`.code.length` check** on `configureERC20Reward` / NFT deposits to reject EOA/empty token addresses early.
-- [ ] **Contract size headroom.** `Web3Campaigns` runtime is 21.1KB / 24.576KB limit (3.4KB left) after Phase 2. Watch `forge build --sizes` before adding more logic; consider splitting a new logic contract into the diamond if a future feature won't fit.
+- [ ] **Contract size headroom.** `Web3Campaigns` runtime is 21.2KB / 24.576KB limit (~3.3KB left). Watch `forge build --sizes` before adding more logic; consider splitting a new logic contract into the diamond if a future feature won't fit.
 
 ## Phase 2 (merged to `dev` via PR #2)
 
