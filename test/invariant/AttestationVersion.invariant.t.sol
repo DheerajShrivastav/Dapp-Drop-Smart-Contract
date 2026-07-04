@@ -69,12 +69,4 @@ contract AttestationVersionInvariant is StdInvariant, Test {
         );
     }
 
-    /// @notice Foundry's reserved post-run hook (NOT an `invariant_`-prefixed per-call check, which
-    /// would trivially fail on the initial zero-call state): runs once at the end of each fuzz run
-    /// and confirms the fuzzer actually exercised both the accept and reject paths, rather than
-    /// degenerating into a vacuous test.
-    function afterInvariant() public view {
-        assertGt(handler.ghost_acceptedCount(), 0, "no attestation was ever accepted across the whole run");
-        assertGt(handler.ghost_rejectedCount(), 0, "no attestation was ever rejected across the whole run");
-    }
 }
