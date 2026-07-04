@@ -158,7 +158,10 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         vm.warp(block.timestamp + campaigns.CLAIM_GRACE_PERIOD() + 1);
 
         uint256 remaining = erc1155DepositedOf[id] - (erc1155ClaimResolved[id] ? erc1155AllocOf[id] : 0);
-        if (remaining == 0) return; // withdrawUnclaimedERC1155 reverts NFTNotEscrowed on a zero amount
+        if (remaining == 0) {
+            erc1155SweepResolved[id] = true;
+            return;
+        }
 
         uint256[] memory ids = new uint256[](1);
         ids[0] = ASSET_ID;

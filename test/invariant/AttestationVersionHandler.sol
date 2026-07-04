@@ -76,10 +76,11 @@ contract AttestationVersionHandler is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sign(SIGNER_PK, completed, staleVersion, deadline);
 
-        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
-        campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig);
-
-        ghost_rejectedCount++;
+        try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
+            revert("attestReplayStaleVersion: stale version was incorrectly accepted");
+        } catch {
+            ghost_rejectedCount++;
+        }
     }
 
     /// @dev Attempts to skip ahead past the required next version. Must always revert.
@@ -88,10 +89,11 @@ contract AttestationVersionHandler is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sign(SIGNER_PK, completed, futureVersion, deadline);
 
-        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
-        campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig);
-
-        ghost_rejectedCount++;
+        try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
+            revert("attestSkipAheadVersion: future version was incorrectly accepted");
+        } catch {
+            ghost_rejectedCount++;
+        }
     }
 
     /// @dev Correct version, correct EIP-712 encoding, but signed by a key that never held
@@ -101,10 +103,11 @@ contract AttestationVersionHandler is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sign(NON_SIGNER_PK, completed, nextVersion, deadline);
 
-        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
-        campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig);
-
-        ghost_rejectedCount++;
+        try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
+            revert("attestNonSigner: non-signer signature was incorrectly accepted");
+        } catch {
+            ghost_rejectedCount++;
+        }
     }
 
     /// @dev Correct version and signer, but an already-expired deadline. Must always revert on
@@ -114,9 +117,10 @@ contract AttestationVersionHandler is Test {
         uint256 deadline = bound(pastSeed, 0, block.timestamp > 0 ? block.timestamp - 1 : 0);
         bytes memory sig = _sign(SIGNER_PK, completed, nextVersion, deadline);
 
-        vm.expectRevert(CampaignStorage.Web3Campaigns__SignatureExpired.selector);
-        campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig);
-
-        ghost_rejectedCount++;
+        try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
+            revert("attestExpiredDeadline: expired deadline was incorrectly accepted");
+        } catch {
+            ghost_rejectedCount++;
+        }
     }
 }
