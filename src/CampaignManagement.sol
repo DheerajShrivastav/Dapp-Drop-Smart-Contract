@@ -520,6 +520,7 @@ contract CampaignManagement is CampaignStorage {
         if (_erc20Swept[_campaignId]) {
             return 0;
         }
+        _erc20Swept[_campaignId] = true;
         address token = _erc20RewardToken[_campaignId];
         if (token == address(0)) {
             return 0;
@@ -529,10 +530,8 @@ contract CampaignManagement is CampaignStorage {
             return 0;
         }
 
-        _erc20Swept[_campaignId] = true;
         address host = _campaigns[_campaignId].host;
         IERC20(token).safeTransfer(host, refunded);
-        emit UnclaimedERC20Swept(_campaignId, host, refunded);
     }
 
     /**
