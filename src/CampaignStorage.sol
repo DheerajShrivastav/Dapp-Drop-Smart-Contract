@@ -55,6 +55,9 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__InvalidSigner();
     error Web3Campaigns__TaskManagedBySignature();
     error Web3Campaigns__ZeroAddress();
+    // Cancellation Errors
+    error Web3Campaigns__CampaignNotCancellable();
+    error Web3Campaigns__CampaignHasParticipants();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -80,7 +83,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
         Draft, // Campaign created, host is adding tasks
         Open, // Campaign active, participants can join and complete tasks
         Ended, // Campaign period over, participants can claim rewards
-        Closed // Campaign fully concluded, no more claims
+        Closed, // Campaign fully concluded, no more claims
+        Cancelled // Host aborted before anyone participated; escrow refunded, terminal
     }
 
     enum TaskType {
@@ -192,6 +196,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event OffChainRewardConfigured(uint256 indexed campaignId, string description);
     event BatchTasksVerified(uint256 indexed campaignId, uint256 count);
     event BatchTasksAdded(uint256 indexed campaignId, uint256 count);
+    event CampaignCancelled(uint256 indexed campaignId, address indexed host, uint256 refundedERC20);
     event TaskVerifiedWithSignature(
         uint256 indexed campaignId,
         address indexed participant,

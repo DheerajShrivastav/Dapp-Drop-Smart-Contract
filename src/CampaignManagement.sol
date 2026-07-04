@@ -465,14 +465,74 @@ contract CampaignManagement is CampaignStorage {
         }
     }
 
-    /// @dev Shared guard for unclaimed sweeps: Closed + grace elapsed.
+    /// @dev Shared guard for unclaimed sweeps: Closed + grace elapsed, OR Cancelled (immediate --
+    /// cancellation is only possible while totalParticipants == 0, so no Merkle root could ever have
+    /// been published and no claim could ever have been made; there is no race to protect against).
     function _requireSweepable(uint256 _campaignId) internal view {
-        if (_campaigns[_campaignId].status != CampaignStatus.Closed) {
+        CampaignStatus s = _campaigns[_campaignId].status;
+        if (s == CampaignStatus.Cancelled) {
+            return;
+        }
+        if (s != CampaignStatus.Closed) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }
         if (block.timestamp < _campaignClosedAt[_campaignId] + CLAIM_GRACE_PERIOD) {
             revert Web3Campaigns__GracePeriodActive();
         }
+    }
+
+    /**
+     * @notice Cancel a campaign before anyone has participated, refunding escrowed ERC20 rewards.
+     * @dev Only allowed while status is Draft or Open AND totalParticipants == 0 -- the moment a
+     *      single participant has genuinely engaged, the campaign is locked in and must run its
+     *      normal course (Ended -> Closed -> claims/unclaimed sweep). This closes off a
+     *      bait-and-switch griefing path where a host could otherwise let participants do free
+     *      work and then cancel right before Ended to dodge paying out.
+     *      Escrowed NFTs (if any) are NOT auto-refunded here since there is no on-chain enumerable
+     *      inventory list per campaign -- call withdrawUnclaimedERC721/withdrawUnclaimedERC1155
+     *      afterward (they become immediately callable once Cancelled, no grace period, for the
+     *      same reason described on _requireSweepable).
+     * @param _campaignId Campaign ID
+     */
+    function cancelCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
+        Campaign storage campaign = _campaigns[_campaignId];
+
+        if (campaign.status != CampaignStatus.Draft && campaign.status != CampaignStatus.Open) {
+            revert Web3Campaigns__CampaignNotCancellable();
+        }
+        if (campaign.totalParticipants != 0) {
+            revert Web3Campaigns__CampaignHasParticipants();
+        }
+
+        campaign.status = CampaignStatus.Cancelled;
+        emit CampaignStatusUpdated(_campaignId, CampaignStatus.Cancelled);
+
+        uint256 refunded = _refundERC20IfAny(_campaignId);
+        emit CampaignCancelled(_campaignId, campaign.host, refunded);
+    }
+
+    /// @dev Silently refunds any escrowed-but-undistributed ERC20 to the host and marks the
+    /// campaign swept, without reverting if there's nothing configured/escrowed to refund (unlike
+    /// the explicit withdrawUnclaimedERC20, which is meant to be called standalone and should be
+    /// noisy about a no-op). Distributed is guaranteed 0 here since claims require Ended status,
+    /// which cancelCampaign's own guard never allows.
+    function _refundERC20IfAny(uint256 _campaignId) internal returns (uint256 refunded) {
+        if (_erc20Swept[_campaignId]) {
+            return 0;
+        }
+        address token = _erc20RewardToken[_campaignId];
+        if (token == address(0)) {
+            return 0;
+        }
+        refunded = _erc20Escrowed[_campaignId] - _erc20Distributed[_campaignId];
+        if (refunded == 0) {
+            return 0;
+        }
+
+        _erc20Swept[_campaignId] = true;
+        address host = _campaigns[_campaignId].host;
+        IERC20(token).safeTransfer(host, refunded);
+        emit UnclaimedERC20Swept(_campaignId, host, refunded);
     }
 
     /**

@@ -21,7 +21,7 @@ contract Web3Campaigns is
     ERC1155Holder
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.4.0";
+    string public constant VERSION = "0.5.0";
 
     constructor() {
         // Grant emergency admin, moderator, and (bootstrap) signer roles to deployer.
@@ -142,6 +142,11 @@ contract Web3Campaigns is
     // Secure wrapper for CampaignManagement.closeCampaign
     function closeCampaign(uint256 _campaignId) public override whenNotPaused {
         super.closeCampaign(_campaignId);
+    }
+
+    // Secure wrapper for CampaignManagement.cancelCampaign
+    function cancelCampaign(uint256 _campaignId) public override whenNotPaused nonReentrant {
+        super.cancelCampaign(_campaignId);
     }
 
     // Secure wrapper for ParticipantManagement.completeTask

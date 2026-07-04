@@ -1,14 +1,14 @@
 # Branch Topology — Dapp-Drop
 
-**Active work:** `feature/invariant-tests` (forked from `dev` post-Phase-2 merge) holds stateful-fuzz invariant test suites for escrow/settlement/attestation. Found and fixed a real HIGH-severity bug already live on `dev` (cross-campaign ERC20 drain via `claimERC20` — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3). 75 tests passing; not yet merged to `dev` — **prioritize this fix for review/merge.**
+**Active work:** `feature/cancel-campaign` (forked from `dev` post-invariant-hardening merge) adds `cancelCampaign` — host-only campaign abort, gated to Draft/Open **and** `totalParticipants == 0` (closes a bait-and-switch griefing path where a host could otherwise cancel after driving free participant engagement). 84 tests passing; not yet merged to `dev`.
 
-Merged to `dev`: `feature/v0.3-security-hardening` (Stage A + B1–B3) as PR #1 (`fd28f27`); `feature/phase2-signature-verification` (EIP-712 signed attestations, raised via the `no-mistakes` pipeline) as PR #2. `dev` is now VERSION 0.4.0.
+Merged to `dev`: `feature/v0.3-security-hardening` (Stage A + B1–B3) as PR #1 (`fd28f27`); `feature/phase2-signature-verification` (EIP-712 signed attestations, raised via the `no-mistakes` pipeline) as PR #2; `feature/invariant-tests` (stateful-fuzz suites, incl. a real HIGH-severity cross-campaign ERC20 drain fix — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3, also raised via `no-mistakes`) as PR #3. `dev` is now VERSION 0.4.0 (about to become 0.5.0 once `cancelCampaign` merges).
 
 ---
 
 Four original branches, two independent dev lines from common ancestor `563f9f5` (master baseline / "security audit plan").
 
-- **`dev` = SOURCE OF TRUTH.** VERSION 0.4.0, Solidity 0.8.31. Full escrow + Merkle settlement rewrite (PR #1) + signed task verification (PR #2) merged. Use this branch as the base for all new work.
+- **`dev` = SOURCE OF TRUTH.** VERSION 0.4.0, Solidity 0.8.31. Escrow + Merkle settlement rewrite (PR #1), signed task verification (PR #2), and invariant-hardening + security fix (PR #3) all merged. Use this branch as the base for all new work.
 - **`origin/master`** — old baseline. Single flat `CampaignReward`. `dev` is a strict superset.
 - **`origin/feature/flexible-reward-system`** — OBSOLETE / fully merged into `dev`. Safe to delete.
 - **`origin/feature/single-tx-campaign-setup`** — UNMERGED, genuinely divergent (5 unique commits, never received the flexible reward system). Holds **one** unique feature not on `dev`:
