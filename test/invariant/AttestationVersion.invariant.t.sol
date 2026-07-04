@@ -68,5 +68,4 @@ contract AttestationVersionInvariant is StdInvariant, Test {
             "completion state diverged from last accepted attestation"
         );
     }
-
 }
