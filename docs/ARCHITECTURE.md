@@ -27,12 +27,17 @@ AccessControl (OZ) + EIP712 (OZ)
 
 ## Lifecycle state machine (strictly forward, no reverse)
 
-`Draft → Open → Ended → Closed`
+```
+Draft → Open → Ended → Closed
+  ↓        ↓
+  └──→ Cancelled (only while totalParticipants == 0)
+```
 
 - **Draft**: configure tasks + rewards. Entered via `createCampaign` (HOST_ROLE).
 - `openCampaign` (host): Draft→Open. `completeTask` (self-verify) allowed only when Open + within start/end time. `verifyTaskCompletionWithSignature` (signed off-chain verification) allowed when Open or Ended.
 - `endCampaign` (host): Open→Ended, requires `block.timestamp >= endTime` (NOTE: code requires this despite a comment claiming early-end is allowed — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md)).
 - `closeCampaign` (host): Ended→Closed (records `_campaignClosedAt` to start the unclaimed-sweep grace window).
+- `cancelCampaign` (host): Draft or Open → Cancelled, **only while `campaign.totalParticipants == 0`**. The moment one participant has genuinely engaged (completed any task), cancellation is permanently blocked (`CampaignHasParticipants`) — this closes a bait-and-switch griefing path where a host could otherwise let participants do free work and cancel right before Ended to dodge paying out. Refunds escrowed ERC20 immediately (no grace period — safe because no Merkle root could ever have been published pre-Ended, so no claim was ever possible). Escrowed NFTs are reclaimed via the existing `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155`, which become immediately callable (no grace wait) once a campaign is `Cancelled`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
 
 ## Reward / claim flow (v0.3 — escrow + Merkle settlement)
 

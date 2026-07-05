@@ -40,6 +40,14 @@ Participant claim (ParticipantManagement.sol):
 
 Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`.
 
+## Cancellation refund (`cancelCampaign`)
+
+`cancelCampaign(id)` (CampaignManagement.sol) — host-only, requires status Draft or Open **and** `campaign.totalParticipants == 0`; transitions to the terminal `Cancelled` status. Deliberately restrictive: once one participant has genuinely engaged, cancellation is permanently blocked (`CampaignHasParticipants`), closing a bait-and-switch path where a host could let participants do free work and cancel right before `Ended` to dodge paying out.
+
+- **ERC20**: refunded immediately in the same call via the internal `_refundERC20IfAny` — no grace period, since no Merkle root could ever have been published pre-Ended (claims require `Ended`/`Closed`), so no claim was ever possible. Silently no-ops if no ERC20 reward was configured/escrowed (unlike the explicit `withdrawUnclaimedERC20`, which reverts on nothing-to-sweep).
+- **NFT**: not auto-refunded (no on-chain enumerable per-campaign inventory list to iterate) — instead, `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` become **immediately callable** (no grace wait) once status is `Cancelled` (see `_requireSweepable`'s early-return for that status). Host calls them with the specific tokenIds/ids they know they deposited.
+- Emits `CampaignCancelled(id, host, refundedERC20)` plus the usual `CampaignStatusUpdated`.
+
 ## Off-chain reward
 
 `setOffChainReward(id, description, metadata)` — no on-chain payout; informational (stored in the standalone `_offChainReward` mapping). View: `getOffChainReward(id)`.

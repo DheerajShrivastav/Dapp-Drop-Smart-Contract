@@ -1,6 +1,6 @@
 # Security & Correctness Findings — Web3Campaigns
 
-> Original code-audit findings, annotated with current status through the invariant-test hardening pass (`feature/invariant-tests`, forked from `dev` post-Phase-2 merge). Verify line numbers before acting.
+> Original code-audit findings, annotated with current status through the `cancelCampaign` feature pass (`feature/cancel-campaign`, forked from `dev` post-invariant-hardening merge). Verify line numbers before acting.
 
 ## Status legend
 ✅ FIXED · 🟡 OPEN · 🔵 INTENTIONAL (founder decision) · ⏳ ADDRESSED IN PROGRESS
@@ -28,7 +28,13 @@
 13. 🟡 `== 0` existence checks (id-sentinel `incorrect-equality`) — low risk by design; unchanged.
 
 ## Not yet implemented (deferred)
-MAX_PARTICIPANTS enforcement, JOIN_COOLDOWN, cancel-campaign/refund, protocol fee, N-of-M threshold signing, sybil gating, gasless claims. `.code.length` token checks on `configureERC20Reward`. Allocation-fairness dispute window (Merkle root is host-controlled, see below).
+MAX_PARTICIPANTS enforcement, JOIN_COOLDOWN, protocol fee, N-of-M threshold signing, sybil gating, gasless claims. `.code.length` token checks on `configureERC20Reward`. Allocation-fairness dispute window (Merkle root is host-controlled, see below).
+
+## New surface added in the cancelCampaign pass (review focus)
+- **`cancelCampaign` — bait-and-switch griefing path closed by zero-participants gate.** The function is only callable while `totalParticipants == 0`. Once one participant has completed any task the campaign is permanently locked in (`CampaignHasParticipants`). This was an explicit founder requirement: without the gate a host could let participants do free work then cancel right before `Ended` to avoid paying out. Tested with an explicit abuse-vector test (`test_CancelCampaign_RevertsOnceAParticipantHasEngaged` in `test/CancelCampaign.t.sol`).
+- **ERC20 refund via `_refundERC20IfAny` — immediate, no grace period.** Safe because `cancelCampaign` is only reachable while `totalParticipants == 0`, which means no Merkle root could ever have been published (roots are set during Ended, which requires prior Open state where participants could have engaged) and no claim was ever possible. The `_erc20Swept` flag is set atomically with the transfer to prevent double-refund.
+- **NFT reclaim — no auto-enumeration.** Escrowed NFTs are not auto-returned (no on-chain per-campaign inventory list). The host must call `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` with the specific tokenIds they know they deposited. `_requireSweepable` now returns early for `Cancelled` status (no grace wait needed, same rationale as ERC20 above).
+- **`Cancelled` is a new terminal status.** No state transition out of `Cancelled` exists. Guards on Open/Ended/Closed-requiring functions all implicitly exclude it; `_requireSweepable`'s early-return is the only deliberate `Cancelled`-aware branch. Verify any future state guards also account for this fifth status.
 
 ## New surface added in the invariant-test pass (review focus)
 - **Escrow-solvency invariant found finding #3 above** (cross-campaign ERC20 drain via `claimERC20` after sweep). This is the first bug this project's invariant/fuzz testing has caught — see `test/invariant/EscrowSolvency.invariant.t.sol`.
