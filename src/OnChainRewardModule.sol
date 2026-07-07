@@ -87,9 +87,7 @@ contract OnChainRewardModule is IOnChainRewardModule {
      * @dev Host-only, Draft-only. Does not itself commit the campaign to SCORE_TIERED mode --
      *      call setScoreTiers to do that -- so points can be staged before or after tiers.
      */
-    function setTaskPoints(uint256 _campaignId, uint256[] calldata _taskIndices, uint256[] calldata _points)
-        external
-    {
+    function setTaskPoints(uint256 _campaignId, uint256[] calldata _taskIndices, uint256[] calldata _points) external {
         _requireHostAndDraft(_campaignId);
         uint256 taskCount = IWeb3CampaignsForModule(WEB3_CAMPAIGNS).getCampaignTaskCount(_campaignId);
         OnChainRewardLib.validateAndStoreTaskPoints(_taskPoints[_campaignId], taskCount, _taskIndices, _points);
@@ -110,7 +108,8 @@ contract OnChainRewardModule is IOnChainRewardModule {
         uint256[] calldata _amounts
     ) external {
         _requireHostAndDraft(_campaignId);
-        IWeb3CampaignsForModule(WEB3_CAMPAIGNS).setSettlementMode(_campaignId, CampaignStorage.ERC20SettlementMode.RANK_TIERED);
+        IWeb3CampaignsForModule(WEB3_CAMPAIGNS)
+            .setSettlementMode(_campaignId, CampaignStorage.ERC20SettlementMode.RANK_TIERED);
         _mode[_campaignId] = CampaignStorage.ERC20SettlementMode.RANK_TIERED;
         OnChainRewardLib.validateAndStoreRankTiers(_rankTiers[_campaignId], _startRanks, _endRanks, _amounts);
         emit RankTiersConfigured(_campaignId, _startRanks.length);
@@ -121,11 +120,10 @@ contract OnChainRewardModule is IOnChainRewardModule {
      *         settlement.
      * @dev Host-only, Draft-only. Same mode-first-then-tiers ordering as setRankTiers.
      */
-    function setScoreTiers(uint256 _campaignId, uint256[] calldata _minScores, uint256[] calldata _amounts)
-        external
-    {
+    function setScoreTiers(uint256 _campaignId, uint256[] calldata _minScores, uint256[] calldata _amounts) external {
         _requireHostAndDraft(_campaignId);
-        IWeb3CampaignsForModule(WEB3_CAMPAIGNS).setSettlementMode(_campaignId, CampaignStorage.ERC20SettlementMode.SCORE_TIERED);
+        IWeb3CampaignsForModule(WEB3_CAMPAIGNS)
+            .setSettlementMode(_campaignId, CampaignStorage.ERC20SettlementMode.SCORE_TIERED);
         _mode[_campaignId] = CampaignStorage.ERC20SettlementMode.SCORE_TIERED;
         OnChainRewardLib.validateAndStoreScoreTiers(_scoreTiers[_campaignId], _minScores, _amounts);
         emit ScoreTiersConfigured(_campaignId, _minScores.length);

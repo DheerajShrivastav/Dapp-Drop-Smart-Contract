@@ -10,7 +10,10 @@ import {CampaignStorage} from "./CampaignStorage.sol";
 interface IWeb3CampaignsForModule {
     /// @notice A campaign's host and current status, for the module's own authorization/status
     /// checks (config functions require Draft + caller == host; claims require Ended/Closed).
-    function getCampaignHostAndStatus(uint256 campaignId) external view returns (address host, CampaignStorage.CampaignStatus status);
+    function getCampaignHostAndStatus(uint256 campaignId)
+        external
+        view
+        returns (address host, CampaignStorage.CampaignStatus status);
 
     /// @notice Task count for a campaign, used to validate task indices in setTaskPoints.
     function getCampaignTaskCount(uint256 campaignId) external view returns (uint256);

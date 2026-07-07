@@ -218,14 +218,19 @@ library OnChainRewardLib {
             uint256 len = _rankTiers.length;
             result = new RewardTierView[](len);
             for (uint256 i; i < len; ++i) {
-                result[i] =
-                    RewardTierView({threshold: _rankTiers[i].startRank, thresholdEnd: _rankTiers[i].endRank, amount: _rankTiers[i].amount});
+                result[i] = RewardTierView({
+                    threshold: _rankTiers[i].startRank,
+                    thresholdEnd: _rankTiers[i].endRank,
+                    amount: _rankTiers[i].amount
+                });
             }
         } else if (_mode == CampaignStorage.ERC20SettlementMode.SCORE_TIERED) {
             uint256 len = _scoreTiers.length;
             result = new RewardTierView[](len);
             for (uint256 i; i < len; ++i) {
-                result[i] = RewardTierView({threshold: _scoreTiers[i].minScore, thresholdEnd: 0, amount: _scoreTiers[i].amount});
+                result[i] = RewardTierView({
+                    threshold: _scoreTiers[i].minScore, thresholdEnd: 0, amount: _scoreTiers[i].amount
+                });
             }
         }
     }

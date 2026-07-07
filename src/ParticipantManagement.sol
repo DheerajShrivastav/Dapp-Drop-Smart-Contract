@@ -286,7 +286,8 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         bool hasAllRequired = _nowCompleted && _hasCompletedAllRequiredTasks(_campaignId, _participant);
-        IOnChainRewardModule(module).notifyTaskCompletion(_campaignId, _participant, _taskIndex, _nowCompleted, hasAllRequired);
+        IOnChainRewardModule(module)
+            .notifyTaskCompletion(_campaignId, _participant, _taskIndex, _nowCompleted, hasAllRequired);
     }
 
     /**
