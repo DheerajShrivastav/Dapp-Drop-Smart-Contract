@@ -160,6 +160,19 @@ contract CampaignViewFunctions is CampaignStorage {
     }
 
     /**
+     * @notice The OnChainRewardModule instance pinned as authoritative for a campaign.
+     * @dev address(0) until the campaign first adopts an on-chain (RANK_TIERED / SCORE_TIERED)
+     *      settlement mode, at which point it is pinned to the then-current module and never
+     *      reassigned. The pinned module reads this to verify it is still the campaign's
+     *      authoritative module before paying out.
+     * @param _campaignId Campaign ID
+     * @return The pinned module address, or address(0) if the campaign has no pinned module
+     */
+    function getCampaignRewardModule(uint256 _campaignId) external view returns (address) {
+        return _campaignRewardModule[_campaignId];
+    }
+
+    /**
      * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
      */
     function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {

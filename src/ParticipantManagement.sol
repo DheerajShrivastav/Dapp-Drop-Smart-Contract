@@ -375,8 +375,14 @@ contract ParticipantManagement is CampaignStorage {
         public
         virtual
     {
-        if (msg.sender != _onChainRewardModule) {
-            revert Web3Campaigns__NotOnChainRewardModule();
+        // Per-campaign authorization is the SOLE gate here: only the module pinned to THIS campaign
+        // may pay out for it. This deliberately does not also require msg.sender to be the current
+        // global _onChainRewardModule -- that would strand an in-flight pinned campaign the moment
+        // the global default is rotated, defeating the purpose of the pin. The pin is only ever set
+        // to a legitimately admin-registered module, so passing this check already proves the caller
+        // is authorized; a global halt, if needed, is available via the wrapper's whenNotPaused.
+        if (msg.sender != _campaignRewardModule[_campaignId]) {
+            revert Web3Campaigns__RewardModuleMismatch(_campaignId, _campaignRewardModule[_campaignId], msg.sender);
         }
 
         Campaign storage campaign = _campaigns[_campaignId];

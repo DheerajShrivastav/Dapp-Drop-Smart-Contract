@@ -66,6 +66,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__NotFullyCompleted();
     error Web3Campaigns__NoTierMatched();
     error Web3Campaigns__NotOnChainRewardModule();
+    // Per-campaign module pinning
+    error Web3Campaigns__RewardModuleMismatch(uint256 campaignId, address expected, address caller);
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -223,6 +225,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // the trusted setSettlementMode callback.
     mapping(uint256 => ERC20SettlementMode) internal _erc20SettlementMode; // campaignId => mode
     address internal _onChainRewardModule; // trusted contract allowed to call setSettlementMode/payOnChainReward
+    // The OnChainRewardModule instance pinned as authoritative for a campaign, recorded the first
+    // time on-chain settlement is set up for it. Distinct from the global _onChainRewardModule so a
+    // later rotation of the global module cannot retroactively change who governs an existing campaign.
+    mapping(uint256 => address) internal _campaignRewardModule; // campaignId => pinned module (0 = unpinned)
 
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
@@ -284,6 +290,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
         uint256 indexed campaignId, address indexed account, uint256 amount, uint256 rankOrScore
     );
     event OnChainRewardModuleUpdated(address indexed module);
+    // Emitted the first time a campaign is bound to a specific OnChainRewardModule instance.
+    event RewardModulePinned(uint256 indexed campaignId, address indexed module);
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {

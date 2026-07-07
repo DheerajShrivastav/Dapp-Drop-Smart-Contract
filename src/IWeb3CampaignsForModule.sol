@@ -15,6 +15,11 @@ interface IWeb3CampaignsForModule {
     /// @notice Task count for a campaign, used to validate task indices in setTaskPoints.
     function getCampaignTaskCount(uint256 campaignId) external view returns (uint256);
 
+    /// @notice The module instance pinned as authoritative for a campaign (address(0) if none). The
+    /// module reads this to independently confirm it is still the campaign's authoritative module
+    /// before paying anyone out, rather than trusting only its own local state.
+    function getCampaignRewardModule(uint256 campaignId) external view returns (address);
+
     /// @notice Trusted callback the module uses to commit a campaign to RANK_TIERED or
     /// SCORE_TIERED settlement. Web3Campaigns enforces the actual mutual-exclusion rule (a
     /// campaign already committed to a different mode reverts), so a malicious or buggy module

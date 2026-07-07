@@ -30,6 +30,7 @@ contract OnChainRewardModule is IOnChainRewardModule {
     error OnChainRewardModule__NotWeb3Campaigns();
     error OnChainRewardModule__NotCampaignHost();
     error OnChainRewardModule__CampaignAlreadyStarted();
+    error OnChainRewardModule__NotAuthoritativeModule();
 
     // Local authoritative copy of each campaign's chosen mode -- kept alongside the mutual-exclusion
     // guard on Web3Campaigns' side (which is what actually enforces "one mode per campaign"; a
@@ -145,6 +146,17 @@ contract OnChainRewardModule is IOnChainRewardModule {
         bool nowCompleted,
         bool hasAllRequired
     ) external onlyWeb3Campaigns {
+        // Score credit/debit. The revoke branch's `-=` is checked arithmetic (^0.8) and can never
+        // underflow: per-task points are written only by setTaskPoints, which is Draft-only, while
+        // every completion transition that reaches here occurs only once the campaign is Open/Ended
+        // (completeTask / verifyTaskCompletionWithSignature). The lifecycle is strictly forward and
+        // status is set to Draft exactly once at creation, so points[taskIndex] is frozen before any
+        // credit is applied and reads the SAME value at revoke time. A debit can only follow a prior
+        // credit for that same task (a true->false transition requires it was true), and Web3Campaigns
+        // suppresses no-op notifications, so each `+= points` is matched by at most one `-=` of the
+        // identical amount -- the running score can never be driven below zero. See
+        // test_SetTaskPoints_RevertsOnceCampaignLeavesDraft (the immutability invariant that makes
+        // this safe) and test_ScoreTiered_RevokeRestoresScoreExactly (the round-trip).
         uint256 points = _taskPoints[campaignId][taskIndex];
         if (points > 0) {
             if (nowCompleted) {
@@ -183,6 +195,14 @@ contract OnChainRewardModule is IOnChainRewardModule {
     function claimReward(uint256 _campaignId) external {
         if (_onChainRewardClaimed[_campaignId][msg.sender]) {
             revert CampaignStorage.Web3Campaigns__AlreadyClaimedSettlement();
+        }
+
+        // Independently confirm this contract is still the campaign's authoritative module before
+        // touching any rank/score/tier state -- don't trust local storage alone. Web3Campaigns pins
+        // the module per campaign at adoption and enforces that pin in payOnChainReward; checking it
+        // here too means a superseded module fails fast and cannot even begin computing a payout.
+        if (IWeb3CampaignsForModule(WEB3_CAMPAIGNS).getCampaignRewardModule(_campaignId) != address(this)) {
+            revert OnChainRewardModule__NotAuthoritativeModule();
         }
 
         (, CampaignStorage.CampaignStatus status) =

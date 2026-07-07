@@ -306,6 +306,18 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__NotOnChainRewardModule();
         }
         _lockSettlementMode(_campaignId, _mode);
+
+        // Pin the authoritative module for this campaign the first time it adopts an on-chain
+        // (tiered) settlement mode. Pinning is idempotent: the same-mode re-config that legitimately
+        // re-invokes this callback (e.g. a host re-publishing tiers while Draft) leaves an existing
+        // pin untouched and does not re-emit. Because the pin is captured once, a later rotation of
+        // the global _onChainRewardModule cannot retroactively reassign an already-adopted campaign.
+        if (_mode == ERC20SettlementMode.RANK_TIERED || _mode == ERC20SettlementMode.SCORE_TIERED) {
+            if (_campaignRewardModule[_campaignId] == address(0)) {
+                _campaignRewardModule[_campaignId] = _onChainRewardModule;
+                emit RewardModulePinned(_campaignId, _onChainRewardModule);
+            }
+        }
     }
 
     /**
