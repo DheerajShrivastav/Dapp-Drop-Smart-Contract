@@ -383,8 +383,152 @@ contract OnChainRewardModuleTest is Test {
     }
 
     function test_OnlyRegisteredModuleCanCallPayOnChainReward() public {
-        vm.expectRevert(CampaignStorage.Web3Campaigns__NotOnChainRewardModule.selector);
+        // Campaign 1 has never adopted an on-chain mode, so it has no pinned module. The per-campaign
+        // authorization check runs first and rejects any caller against the address(0) pin.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CampaignStorage.Web3Campaigns__RewardModuleMismatch.selector, uint256(1), address(0), address(this)
+            )
+        );
         campaigns.payOnChainReward(1, participant1, 1 ether, 1);
+    }
+
+    /// @dev Full RANK_TIERED setup through Ended, funded, with `module` pinned as authoritative.
+    function _pinnedEndedRankCampaign() internal returns (uint256 id) {
+        uint256 startTime;
+        uint256 endTime;
+        (id, startTime, endTime) = _draftCampaign();
+        _addSocialTask(id);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory startRanks = new uint256[](1);
+        uint256[] memory endRanks = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        startRanks[0] = 1;
+        endRanks[0] = 5;
+        amounts[0] = 50 ether;
+
+        vm.prank(host1);
+        module.setRankTiers(id, startRanks, endRanks, amounts); // pins `module` to this campaign
+
+        _fundEscrow(id, 50 ether);
+        _openCampaign(id, startTime);
+        _endCampaign(id, endTime);
+    }
+
+    function test_PayOnChainReward_SucceedsFromPinnedModule() public {
+        uint256 id = _pinnedEndedRankCampaign();
+        assertEq(campaigns.getCampaignRewardModule(id), address(module));
+
+        vm.prank(address(module));
+        campaigns.payOnChainReward(id, participant1, 10 ether, 1);
+
+        assertEq(token.balanceOf(participant1), 10 ether);
+    }
+
+    function test_PayOnChainReward_RevertsFromNonPinnedAddress() public {
+        uint256 id = _pinnedEndedRankCampaign();
+
+        address intruder = vm.addr(42);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CampaignStorage.Web3Campaigns__RewardModuleMismatch.selector, id, address(module), intruder
+            )
+        );
+        vm.prank(intruder);
+        campaigns.payOnChainReward(id, participant1, 10 ether, 1);
+    }
+
+    /// @notice The actual rotation scenario: after the admin rotates the GLOBAL module to a new
+    /// address, that new global module is still NOT this campaign's pinned module, so it cannot pay
+    /// out -- proving the per-campaign pin binds independently of the mutable global pointer, and
+    /// that the per-campaign check fires ahead of the global one (the rotated-in module would have
+    /// passed the old global check).
+    function test_PayOnChainReward_RevertsFromRotatedGlobalModule() public {
+        uint256 id = _pinnedEndedRankCampaign();
+
+        address newGlobalModule = vm.addr(99);
+        vm.prank(deployer);
+        campaigns.setOnChainRewardModule(newGlobalModule);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CampaignStorage.Web3Campaigns__RewardModuleMismatch.selector, id, address(module), newGlobalModule
+            )
+        );
+        vm.prank(newGlobalModule);
+        campaigns.payOnChainReward(id, participant1, 10 ether, 1);
+    }
+
+    /// @notice The core guarantee of the pin: after the global default is rotated away to another
+    /// address, the campaign's ORIGINAL pinned module can STILL settle it. Before check 2 (the
+    /// global-module gate) was removed this reverted NotOnChainRewardModule and stranded the
+    /// campaign; now the per-campaign pin alone authorizes the payout, so it must succeed.
+    function test_PayOnChainReward_PinnedModuleStillPaysAfterRotation() public {
+        uint256 id = _pinnedEndedRankCampaign();
+
+        address newGlobalModule = vm.addr(99);
+        vm.prank(deployer);
+        campaigns.setOnChainRewardModule(newGlobalModule);
+
+        // `module` is no longer the global default, but is still this campaign's pinned module.
+        vm.prank(address(module));
+        campaigns.payOnChainReward(id, participant1, 10 ether, 1);
+
+        assertEq(token.balanceOf(participant1), 10 ether);
+        assertEq(campaigns.getCampaignRewardModule(id), address(module));
+    }
+
+    /// @notice An unpinned campaign (never adopted an on-chain mode) has pin == address(0), so the
+    /// sole per-campaign check rejects EVERY caller -- including the currently-registered global
+    /// module -- with RewardModuleMismatch. Confirms removing check 2 opened no path to paying out
+    /// an unpinned campaign.
+    function test_PayOnChainReward_UnpinnedCampaignRejectsAllCallers() public {
+        (uint256 id,,) = _draftCampaign(); // no tiers set -> _campaignRewardModule[id] == address(0)
+        assertEq(campaigns.getCampaignRewardModule(id), address(0));
+
+        // Even the registered global module is rejected, because this campaign pinned no module.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CampaignStorage.Web3Campaigns__RewardModuleMismatch.selector, id, address(0), address(module)
+            )
+        );
+        vm.prank(address(module));
+        campaigns.payOnChainReward(id, participant1, 1 ether, 0);
+
+        // And so is an arbitrary address.
+        address intruder = vm.addr(42);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CampaignStorage.Web3Campaigns__RewardModuleMismatch.selector, id, address(0), intruder
+            )
+        );
+        vm.prank(intruder);
+        campaigns.payOnChainReward(id, participant1, 1 ether, 0);
+    }
+
+    /// @notice claimReward's self-check: a module that is NOT the campaign's authoritative (pinned)
+    /// module reverts NotAuthoritativeModule before evaluating any rank/score/tier state.
+    /// @dev Defense-in-depth. Because a campaign's pin is fixed at adoption and can't currently be
+    /// reassigned, there is no live attack path today: the only way to get pin != address(this) is
+    /// to route the claim through a DIFFERENT deployed module (here M2, freshly rotated in as the
+    /// global default) that never governed this campaign. Such a module would also fail the later
+    /// mode gate; the self-check just makes it fail fast with a precise, module-specific error.
+    function test_ClaimReward_NonAuthoritativeModuleReverts() public {
+        uint256 id = _pinnedEndedRankCampaign(); // pinned to `module` (M1)
+
+        // A second module instance is rotated in as the global default; the campaign stays pinned
+        // to M1, so M2 is not authoritative for it.
+        OnChainRewardModule m2 = new OnChainRewardModule(address(campaigns));
+        vm.prank(deployer);
+        campaigns.setOnChainRewardModule(address(m2));
+        assertEq(campaigns.getCampaignRewardModule(id), address(module));
+
+        vm.expectRevert(OnChainRewardModule.OnChainRewardModule__NotAuthoritativeModule.selector);
+        vm.prank(participant1);
+        m2.claimReward(id);
     }
 
     function test_OnlyWeb3CampaignsCanNotifyModule() public {
@@ -442,6 +586,78 @@ contract OnChainRewardModuleTest is Test {
 
         (,,, bool qualified,) = module.getOnChainRewardStatus(id, participant1);
         assertFalse(qualified);
+    }
+
+    /// @notice The immutability invariant that makes notifyTaskCompletion's checked `-= points`
+    /// unable to underflow: task points can be configured only while the campaign is Draft, and the
+    /// lifecycle is strictly forward, so the value credited at completion (Open/Ended) is the exact
+    /// value debited at revoke.
+    function test_SetTaskPoints_RevertsOnceCampaignLeavesDraft() public {
+        (uint256 id, uint256 startTime,) = _draftCampaign();
+        _addSocialTask(id);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory taskIndices = new uint256[](1);
+        uint256[] memory points = new uint256[](1);
+        taskIndices[0] = 0;
+        points[0] = 10;
+        vm.prank(host1);
+        module.setTaskPoints(id, taskIndices, points); // allowed while Draft
+
+        _fundEscrow(id, 1 ether);
+        _openCampaign(id, startTime);
+
+        // Once the campaign has left Draft, points can never be reconfigured again.
+        points[0] = 999;
+        vm.expectRevert(OnChainRewardModule.OnChainRewardModule__CampaignAlreadyStarted.selector);
+        vm.prank(host1);
+        module.setTaskPoints(id, taskIndices, points);
+    }
+
+    /// @notice Exercises the checked `-= points` on the live revoke path: a completion credits the
+    /// score, a signer revocation debits it, and the running score returns to EXACTLY its
+    /// pre-completion value -- no underflow, no unexpected revert.
+    function test_ScoreTiered_RevokeRestoresScoreExactly() public {
+        (uint256 id, uint256 startTime,) = _draftCampaign();
+        _addSocialTask(id);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory taskIndices = new uint256[](1);
+        uint256[] memory points = new uint256[](1);
+        taskIndices[0] = 0;
+        points[0] = 10;
+        vm.prank(host1);
+        module.setTaskPoints(id, taskIndices, points);
+
+        uint256[] memory minScores = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        minScores[0] = 10;
+        amounts[0] = 100 ether;
+        vm.prank(host1);
+        module.setScoreTiers(id, minScores, amounts); // commits SCORE_TIERED
+
+        _fundEscrow(id, 100 ether);
+        _openCampaign(id, startTime);
+
+        // Complete -> score credited (+10).
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+        (,, uint256 scoreAfterComplete,,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(scoreAfterComplete, 10);
+
+        // Signer revokes the same task -> checked `-= points` runs.
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 digest = _attestationDigest(id, participant1, 0, false, 1, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest); // deployer holds SIGNER_ROLE by default
+        bytes memory sig = abi.encodePacked(r, s, v);
+        campaigns.verifyTaskCompletionWithSignature(id, participant1, 0, false, deadline, sig);
+
+        (,, uint256 scoreAfterRevoke,,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(scoreAfterRevoke, 0);
     }
 
     function _attestationDigest(
