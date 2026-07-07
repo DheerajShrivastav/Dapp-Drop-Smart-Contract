@@ -58,6 +58,14 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // Cancellation Errors
     error Web3Campaigns__CampaignNotCancellable();
     error Web3Campaigns__CampaignHasParticipants();
+    // On-Chain Reward Tier Errors
+    error Web3Campaigns__SettlementModeAlreadySet();
+    error Web3Campaigns__WrongSettlementMode();
+    error Web3Campaigns__InvalidTierConfiguration();
+    error Web3Campaigns__TooManyTiers();
+    error Web3Campaigns__NotFullyCompleted();
+    error Web3Campaigns__NoTierMatched();
+    error Web3Campaigns__NotOnChainRewardModule();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -106,6 +114,18 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
         ERC1155 // tokenId is an id; amount is the quantity
     }
 
+    // How a campaign's ERC20 reward is settled. A campaign commits to exactly one mode
+    // (mutually exclusive, chosen once in Draft): UNSET is the initial state before any
+    // settlement path has been configured; MERKLE is the existing off-chain-computed +
+    // Merkle-proof-claimed path; RANK_TIERED and SCORE_TIERED are on-chain-computed, dispute-free
+    // settlement paths requiring no off-chain root at all -- see docs/REWARD_SYSTEM.md.
+    enum ERC20SettlementMode {
+        UNSET,
+        MERKLE,
+        RANK_TIERED,
+        SCORE_TIERED
+    }
+
     // --- Structs ---
     struct CampaignTask {
         TaskType taskType;
@@ -120,6 +140,25 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
         bool enabled;
         string rewardDescription; // Description of off-chain reward
         bytes rewardMetadata; // Additional metadata (e.g., JSON)
+    }
+
+    // Reward tier keyed by completion rank (1-indexed, inclusive range). Ranks are assigned by
+    // completion ORDER (whoever finished all required tasks first), not claim order, so there is
+    // no MEV race once claims open post-Ended.
+    struct RankTier {
+        uint256 startRank;
+        uint256 endRank;
+        uint256 amount;
+    }
+
+    // Reward tier keyed by a minimum participant score (host-defined points-per-task, summed from
+    // on-chain-tracked task completions). Tiers form a "staircase": a participant qualifies for the
+    // highest-threshold tier their score meets or exceeds. Configured as a strictly-descending list
+    // by minScore so the lookup is well-defined and gas-safe regardless of participant count (no
+    // global sort needed -- each participant's tier is a pure function of their own score).
+    struct ScoreTier {
+        uint256 minScore;
+        uint256 amount;
     }
 
     struct Campaign {
@@ -174,6 +213,17 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
     mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
 
+    // --- On-chain reward settlement (dispute-free alternative to Merkle settlement) ---
+    // All tier/score/rank STATE lives in the separately-deployed OnChainRewardModule (its own
+    // EIP-170 budget -- this feature didn't fit in Web3Campaigns' own bytecode alongside everything
+    // else; see docs/NEXT_STEPS.md / TEST_AND_BUILD.md for the full story). Web3Campaigns itself
+    // only keeps the mode flag (needed cheaply, locally, to gate claimERC20's Merkle-path check) and
+    // the module's registered address. A campaign picks exactly one ERC20SettlementMode; the module
+    // is the one that actually enforces "one mode per campaign" and pushes the chosen mode here via
+    // the trusted setSettlementMode callback.
+    mapping(uint256 => ERC20SettlementMode) internal _erc20SettlementMode; // campaignId => mode
+    address internal _onChainRewardModule; // trusted contract allowed to call setSettlementMode/payOnChainReward
+
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
         uint256 indexed campaignId, address indexed host, string name, uint256 startTime, uint256 endTime
@@ -225,6 +275,15 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event UnclaimedNFTsWithdrawn(
         uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count
     );
+
+    // On-Chain Reward Tier Events
+    event TaskPointsSet(uint256 indexed campaignId, uint256 count);
+    event RankTiersConfigured(uint256 indexed campaignId, uint256 tierCount);
+    event ScoreTiersConfigured(uint256 indexed campaignId, uint256 tierCount);
+    event ERC20RewardClaimedOnChain(
+        uint256 indexed campaignId, address indexed account, uint256 amount, uint256 rankOrScore
+    );
+    event OnChainRewardModuleUpdated(address indexed module);
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {

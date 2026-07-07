@@ -202,6 +202,28 @@ contract Web3Campaigns is
         super.withdrawUnclaimedERC20(_campaignId);
     }
 
+    // Secure wrapper for ParticipantManagement.payOnChainReward
+    function payOnChainReward(uint256 _campaignId, address _participant, uint256 _amount, uint256 _rankOrScore)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        super.payOnChainReward(_campaignId, _participant, _amount, _rankOrScore);
+    }
+
+    /**
+     * @notice Register (or rotate) the trusted OnChainRewardModule contract address.
+     * @dev Admin-rotatable rather than set-once-immutable -- an explicit, disclosed exception to
+     *      this project's no-upgradability policy, needed so a compromised or buggy module can be
+     *      swapped out without redeploying Web3Campaigns itself (which retains all fund custody).
+     * @param _module The new module address (may be address(0) to disable the feature).
+     */
+    function setOnChainRewardModule(address _module) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _onChainRewardModule = _module;
+        emit OnChainRewardModuleUpdated(_module);
+    }
+
     // ---- NFT (multi-standard) settlement wrappers ----
 
     function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
