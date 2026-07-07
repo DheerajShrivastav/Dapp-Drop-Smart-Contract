@@ -4,11 +4,11 @@
 >
 > **Trust the Solidity, not the older root-level markdown** (README/CAMPAIGN_WORKFLOW/SECURITY_AUDIT_PLAN are stale). Line numbers drift — re-verify against current code before acting.
 
-## Current state (2026-07-04)
+## Current state (2026-07-07)
 
-`dev` has v0.3 escrow + Merkle settlement (PR #1), Phase 2 signature verification (PR #2), and the invariant-test hardening pass including a real security fix (PR #3) all merged. VERSION `0.4.0` on `dev`.
+`dev` has v0.3 escrow + Merkle settlement (PR #1), Phase 2 signature verification (PR #2), the invariant-test hardening pass including a real security fix (PR #3), and `cancelCampaign` (PR #4) all merged. VERSION `0.5.0` on `dev`.
 
-Active development on branch **`feature/cancel-campaign`** (forked from `dev`): `cancelCampaign` lets a host abort a misconfigured campaign — but **only** while `campaign.totalParticipants == 0`, closing off a bait-and-switch griefing path (host lets people do free work, then cancels right before `Ended` to dodge paying out).
+Active development on branch **`fix/per-campaign-module-pinning`** (forked from `feature/onchain-reward-tiers`): the on-chain tiered reward feature (RANK_TIERED/SCORE_TIERED via the separately-deployed `OnChainRewardModule`) plus two fixes — decoupling ERC20 token config from the settlement-mode lock, and **per-campaign module pinning** so payout authority is bound to the campaign rather than the rotatable global `_onChainRewardModule` default (see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md)).
 
 **Recap (merged to `dev`):**
 - **v0.3 (Stage A/B1/B2/B3)** — correctness fixes, then the reward system fully rebuilt as escrow + Merkle settlement for ERC20 and multi-standard NFT (ERC721 + ERC1155).
@@ -17,7 +17,7 @@ Active development on branch **`feature/cancel-campaign`** (forked from `dev`): 
 
 The contract is **escrow + verify + Merkle-settle**. There is no live mid-campaign claim path. Off-chain rewards remain informational only.
 
-Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **84 tests passing** (9 suites, including 3 stateful-fuzz invariant suites) on `feature/cancel-campaign`. Build clean, `forge fmt --check` clean. Contract size 21.7KB runtime (24.576KB limit — ~2.9KB headroom; watch this closely on future features, e.g. the still-open protocol-fee item).
+Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **104 tests passing** (10 suites, including 3 stateful-fuzz invariant suites) on `fix/per-campaign-module-pinning`. Build clean, `forge fmt --check` clean. Contract size 21.7KB runtime (24.576KB limit — ~2.9KB headroom; watch this closely on future features, e.g. the still-open protocol-fee item).
 
 Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **Merkle settlement after campaign end** is the reward claim model (not live mid-campaign); **`grantHostRole` stays open/unguarded** intentionally for now; **signature verification replaces** (not runs alongside) host-tx verification; **single `SIGNER_ROLE`** for now (no N-of-M threshold yet); replay guard = per-task version counter, which doubles as an update/reverification mechanism; **`cancelCampaign` requires zero participants** (no partial-cancel-after-engagement escape hatch).
 

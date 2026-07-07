@@ -8,7 +8,7 @@ Foundry **1.7.1** installed (`~/.foundry/bin` — `export PATH="$HOME/.foundry/b
 
 To build/run from a clean clone: `git submodule update --init --recursive` → `forge build` → `forge test`.
 
-## Test suites (84 passing, 9 suites)
+## Test suites (104 passing, 10 suites)
 
 Unit/example-based:
 - `test/CampaignStorage.t.sol` (11) — lifecycle/access/batch/withdrawETH; batch task verification via `batchVerifyTaskCompletionWithSignatures`.
@@ -17,6 +17,7 @@ Unit/example-based:
 - `test/NFTSettlement.t.sol` (10) — ERC721/ERC1155 claims, double-claim, bad proof, pre-root, ERC1155 over-allocation, cross-campaign drain guard, deposit/custody, grace-gated sweep. Includes minimal mintable `MockERC721`/`MockERC1155` (reused by the NFT invariant handler).
 - `test/SignatureVerification.t.sol` (16) — happy path + participant-count invariant, anyone-can-submit, false-attestation-doesn't-count, campaign-status guards, task-not-found, signer rotation/revocation, domain isolation, batch atomicity, array-length/empty-batch reverts.
 - `test/CancelCampaign.t.sol` (9) — Draft/Open cancellation success, ERC20 refund, **the abuse vector closed** (`test_CancelCampaign_RevertsOnceAParticipantHasEngaged` — cancel blocked the moment one participant completes a task), status guards (Ended/already-Cancelled/not-host/paused), immediate NFT reclaim post-cancel (no grace wait). Includes a local minimal mintable `MockERC721Cancel`.
+- `test/OnChainRewardModule.t.sol` (20) — on-chain tiered settlement + per-campaign module pinning. RANK_TIERED/SCORE_TIERED end-to-end (first-completer top tier, double-claim, unranked/below-lowest-tier reverts, task-points→tier match; the score test straddles the 30s anti-spam cooldown between a participant's two completions), mode exclusivity (configuring a token does **not** foreclose tiered; a tiered campaign can't also set a Merkle root), access control (only-host tiers, only-module `setSettlementMode`/`payOnChainReward`, only-Web3Campaigns notify, only-admin rotate), signer-revocation-blocks-claim, and the pinning matrix — `payOnChainReward` succeeds from the pinned module (incl. **after the global default is rotated away**), reverts `RewardModuleMismatch` from a non-pinned/rotated-in address, unpinned campaign rejects every caller, and `claimReward` reverts `NotAuthoritativeModule` from a non-authoritative module.
 
 Stateful-fuzz invariant suites (`test/invariant/`) — each pairs a `*Handler.sol` (fuzzed actions + ghost accounting) with a `*.invariant.t.sol` (assertions):
 - **`EscrowSolvency.invariant.t.sol`** (3 invariants) — drives create/fund/settle → claim → sweep across many ERC20 campaigns sharing one reward token. **Found and pinned a real bug** (see `docs/SECURITY_FINDINGS.md` #3): `claimERC20` didn't check `_erc20Swept`, allowing a cross-campaign drain. Now fixed and asserted: `invariant_globalTokenAccounting`, `invariant_perCampaignBacked`, `invariant_distributedLeqEscrowed`.

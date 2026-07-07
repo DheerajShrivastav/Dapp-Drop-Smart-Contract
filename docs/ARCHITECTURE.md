@@ -45,6 +45,14 @@ ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (
 
 NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` → participants `claimNFT(standard, token, tokenId, amount, proof)` → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
 
+## On-chain tiered settlement + per-campaign module pinning
+
+An alternative to Merkle settlement: `RANK_TIERED` / `SCORE_TIERED` ERC20 rewards are computed on-chain (by completion rank or task-point score) in a separately-deployed `OnChainRewardModule`, which holds all rank/score/tier state. `Web3Campaigns` keeps all custody and pays out only via the trusted `payOnChainReward` callback. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
+
+`_onChainRewardModule` is the **global default** — the module instance assigned to a campaign the first time it adopts an on-chain (tiered) mode. It is admin-rotatable (`setOnChainRewardModule`), but rotation only affects *future* adoptions:
+- **Pinning happens once**, in `setSettlementMode`: the first `RANK_TIERED`/`SCORE_TIERED` commit records `_campaignRewardModule[id] = _onChainRewardModule` and emits `RewardModulePinned`. Same-mode re-configs (e.g. re-publishing tiers while Draft) are idempotent — no re-pin, no re-emit.
+- **`payOnChainReward` authorizes solely against the per-campaign pin** (`msg.sender == _campaignRewardModule[id]`, else `RewardModuleMismatch`), *not* the global default. So a module rotated out of the global slot stays authoritative for every campaign it was already pinned to, and a newly-registered module cannot settle campaigns adopted under an older one.
+
 ## Task verification (Phase 2 — signed attestations)
 
 Off-chain tasks (social follows, Discord joins, `ONCHAIN_TX`) are verified via EIP-712 signed attestations from a `SIGNER_ROLE` key, not host transactions — `verifyTaskCompletionWithSignature`/`batchVerifyTaskCompletionWithSignatures` replaced the old `verifyTaskCompletion`/`batchVerifyTaskCompletion`. `ONCHAIN_HOLD_ERC20/ERC721` remain self-verified on-chain in `completeTask` and are not signature-overridable. Full detail: [TASK_VERIFICATION.md](TASK_VERIFICATION.md).

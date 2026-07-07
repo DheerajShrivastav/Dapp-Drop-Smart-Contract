@@ -13,10 +13,10 @@ There is **no ETH reward path** — ETH only enters via `receive()` and is recov
 State (CampaignStorage.sol): `_erc20RewardToken`, `_erc20Escrowed`, `_erc20Distributed`, `_erc20MerkleRoot`, `_erc20SettlementClaimed`, `_campaignClosedAt`, `_erc20Swept`.
 
 Host flow (CampaignManagement.sol):
-1. `configureERC20Reward(id, token)` — Draft only; records the reward token, sets `rewardsConfigured`.
+1. `configureERC20Reward(id, token)` — Draft only; records the reward token. **Does not commit a settlement mode** — token configuration is common to all three ERC20 paths, so MERKLE is committed later by `setERC20MerkleRoot`, and the tiered modes by the module (see "On-chain tiered settlement" below).
 2. `fundCampaignERC20(id, amount)` — escrows tokens INTO the contract via `SafeERC20.safeTransferFrom(host -> contract)`. Allowed in Draft/Open/Ended (top-up). `_erc20Escrowed += amount`.
 3. `endCampaign(id)` — at/after `endTime`.
-4. `setERC20MerkleRoot(id, root)` — Ended only; commits off-chain allocations. Updatable while Ended, frozen at Closed.
+4. `setERC20MerkleRoot(id, root)` — Ended only; commits off-chain allocations **and commits the campaign to MERKLE settlement** (the mutual-exclusion lock — reverts `SettlementModeAlreadySet` if the campaign already adopted a tiered mode). Updatable while Ended, frozen at Closed.
 5. `withdrawUnclaimedERC20(id)` — after Closed + `CLAIM_GRACE_PERIOD` (30 days); sweeps `escrowed - distributed` to host; single-sweep guarded by `_erc20Swept`.
 
 Participant claim (ParticipantManagement.sol):
@@ -24,6 +24,16 @@ Participant claim (ParticipantManagement.sol):
 - Off-chain tooling must build the tree with `@openzeppelin/merkle-tree` using leaf encoding `["address","uint256"]` to match.
 
 Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`.
+
+## ERC20 on-chain tiered settlement (RANK_TIERED / SCORE_TIERED) — dispute-free alternative
+
+Payout amounts are computed purely from on-chain completion state — no host-published root to dispute — in the separately-deployed `OnChainRewardModule` (its own EIP-170 budget). `Web3Campaigns` keeps all custody; the module only decides who gets paid how much and calls back into the trusted `payOnChainReward`.
+
+Flow: `configureERC20Reward` (token only, no mode lock) → host calls `module.setRankTiers`/`setScoreTiers` (Draft), which commits the mode via the `setSettlementMode` callback and **pins the module to the campaign** (once, idempotent) → run campaign (the module is notified of each qualifying completion for rank/score bookkeeping) → `endCampaign` → participants call `module.claimReward(id)`, paid from escrow via `payOnChainReward`.
+
+- **`claimReward` self-check**: before evaluating any rank/score/tier logic, the module calls `getCampaignRewardModule(id)` and reverts `OnChainRewardModule__NotAuthoritativeModule` if it isn't `address(this)` — so a module acting on stale local state for a campaign it's no longer authoritative for can't even begin computing a payout. Defense-in-depth; see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md).
+- **Authorization**: `payOnChainReward` accepts only the per-campaign pinned module (`RewardModuleMismatch` otherwise), independent of the rotatable global default — see [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Mutual exclusivity**: a campaign commits to exactly one of MERKLE / RANK_TIERED / SCORE_TIERED; the first commit wins and any cross-mode second commit reverts `SettlementModeAlreadySet`.
 
 ## NFT — multi-standard (ERC721 + ERC1155), Merkle settlement (Stage B2)
 
