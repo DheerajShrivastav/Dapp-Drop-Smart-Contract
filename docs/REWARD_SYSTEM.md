@@ -1,6 +1,6 @@
 # Reward System — Web3Campaigns
 
-> As of `feature/invariant-tests` (forked from `dev` post-Phase-2 merge). Both ERC20 (B1) and NFT (B2) use escrow + post-campaign Merkle settlement. The legacy live-distribution system was deleted in B3. **Security note**: `claimERC20` now rejects claims on swept campaigns (`AlreadySwept`) — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3.
+> As of `fix/per-campaign-module-pinning`. Both ERC20 (B1) and NFT (B2) use escrow + post-campaign Merkle settlement; `RANK_TIERED`/`SCORE_TIERED` add an on-chain alternative (see below). The legacy live-distribution system was deleted in B3. **Security note**: `claimERC20` now rejects claims on swept campaigns (`AlreadySwept`) — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3.
 
 ## Model: escrow + post-campaign Merkle settlement
 

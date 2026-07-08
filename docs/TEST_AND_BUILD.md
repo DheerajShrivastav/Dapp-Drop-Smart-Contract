@@ -1,6 +1,6 @@
 # Test Coverage & Build — Web3Campaigns
 
-> As of `feature/cancel-campaign` (forked from `dev` post-invariant-hardening merge).
+> As of `fix/per-campaign-module-pinning` (forked from `feature/onchain-reward-tiers`, itself off `dev` post-PR #4).
 
 ## Toolchain (now set up)
 
@@ -31,6 +31,7 @@ Claim tests build real Merkle proofs via Solidity helpers matching the OZ Standa
 - Multi-leaf NFT proofs in the unit suite (current NFT unit tests use single-leaf roots; the invariant suite exercises many campaigns but each with its own single-leaf root) — a dedicated 2+ leaf NFT tree unit test would still add value.
 - No invariant coverage yet for the reward-configuration side (e.g., `configureERC20Reward`/deposit access control fuzzing) — current invariants focus on the settlement/claim/sweep lifecycle.
 - No dedicated invariant/fuzz test for `cancelCampaign` yet (unit tests only) — a candidate property: cancelling never leaves more ERC20 escrowed in the contract than `_erc20Escrowed[id]` (i.e., the refund always fully drains what was owed).
+- No invariant coverage for the on-chain tiered settlement path yet — `OnChainRewardModule` has 23 unit tests but no stateful-fuzz suite; candidate properties: `sum(on-chain claims) <= escrowed`, each participant can only claim once, rank assignment is strictly monotone (no duplicate ranks), and the pinned-module invariant (once pinned, `_campaignRewardModule[id]` never changes).
 
 ## Known issues
 - CI (`.github/workflows/test.yml`) runs `forge fmt --check`, `forge build --sizes`, `forge test -vvv` under `FOUNDRY_PROFILE=ci`, but `foundry.toml` defines no `[profile.ci]` (falls back to default). Cosmetic.

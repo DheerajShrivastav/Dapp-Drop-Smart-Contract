@@ -27,6 +27,6 @@ Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **
 - [REWARD_SYSTEM.md](REWARD_SYSTEM.md) — escrow + Merkle settlement for ERC20 and multi-standard NFT rewards, plus cancellation refund.
 - [TASK_VERIFICATION.md](TASK_VERIFICATION.md) — Phase 2: EIP-712 signed attestations for off-chain task completion, replay/update model, signer rotation.
 - [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) — original findings with current FIXED / OPEN / INTENTIONAL status, plus the invariant-found cross-campaign drain bug.
-- [BRANCHES.md](BRANCHES.md) — branch topology, merged branches, active cancel-campaign branch.
+- [BRANCHES.md](BRANCHES.md) — branch topology, merged branches, active on-chain tiered reward / per-campaign pinning branch.
 - [TEST_AND_BUILD.md](TEST_AND_BUILD.md) — toolchain setup, test coverage (unit + invariant suites), how to build/run.
 - [NEXT_STEPS.md](NEXT_STEPS.md) — pick-up list: hardening items + Phase 2/3 roadmap.
