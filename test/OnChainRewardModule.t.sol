@@ -703,6 +703,96 @@ contract OnChainRewardModuleTest is Test {
         assertFalse(qualifiedB);
     }
 
+    /// @notice Revoking an OPTIONAL task must NOT disqualify a RANK_TIERED participant who still
+    /// holds every required task. Before the fix, hasAllRequired was gated by _nowCompleted so
+    /// it was always false on revoke, and the module unconditionally set _currentlyQualified=false.
+    function test_RankTiered_OptionalTaskRevokeKeepsQualified() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        // task0: required; task1: optional
+        _addSocialTask(id);
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Optional task", "", true);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory startRanks = new uint256[](1);
+        uint256[] memory endRanks = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        startRanks[0] = 1;
+        endRanks[0] = 5;
+        amounts[0] = 50 ether;
+        vm.prank(host1);
+        module.setRankTiers(id, startRanks, endRanks, amounts);
+
+        _fundEscrow(id, 50 ether);
+        _openCampaign(id, startTime);
+
+        // participant1 completes both tasks; they become qualified (rank 1)
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+        vm.warp(block.timestamp + 5 minutes + 1);
+        vm.prank(participant1);
+        campaigns.completeTask(id, 1);
+
+        (,,, bool qualifiedBefore,) = module.getOnChainRewardStatus(id, participant1);
+        assertTrue(qualifiedBefore);
+
+        // Signer revokes the OPTIONAL task; participant1 still has the required task
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 digest = _attestationDigest(id, participant1, 1, false, 1, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
+        bytes memory sig = abi.encodePacked(r, s, v);
+        campaigns.verifyTaskCompletionWithSignature(id, participant1, 1, false, deadline, sig);
+
+        // Qualification must survive — only the optional task was revoked
+        (,,, bool qualifiedAfter,) = module.getOnChainRewardStatus(id, participant1);
+        assertTrue(qualifiedAfter);
+
+        // Claim succeeds because the participant is still qualified
+        _endCampaign(id, endTime);
+        vm.prank(participant1);
+        module.claimReward(id);
+        assertEq(token.balanceOf(participant1), 50 ether);
+    }
+
+    /// @notice The Web3Campaigns-level double-claim guard in payOnChainReward must fire even when
+    /// called directly by the pinned module (bypassing the module's own _onChainRewardClaimed
+    /// check). This defends against a compromised module that omits its own guard.
+    function test_PayOnChainReward_DirectDoubleClaimReverts() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        _addSocialTask(id);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory startRanks = new uint256[](1);
+        uint256[] memory endRanks = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        startRanks[0] = 1;
+        endRanks[0] = 5;
+        amounts[0] = 50 ether;
+        vm.prank(host1);
+        module.setRankTiers(id, startRanks, endRanks, amounts);
+
+        _fundEscrow(id, 50 ether);
+        _openCampaign(id, startTime);
+
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+
+        _endCampaign(id, endTime);
+
+        // First direct call (as pinned module) succeeds
+        vm.prank(address(module));
+        campaigns.payOnChainReward(id, participant1, 1 ether, 1);
+
+        // Second direct call for the same participant hits the Web3Campaigns-level guard
+        vm.expectRevert(CampaignStorage.Web3Campaigns__AlreadyClaimedSettlement.selector);
+        vm.prank(address(module));
+        campaigns.payOnChainReward(id, participant1, 1 ether, 1);
+    }
+
     function _attestationDigest(
         uint256 campaignId,
         address participant,

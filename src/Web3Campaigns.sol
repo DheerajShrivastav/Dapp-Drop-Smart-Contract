@@ -162,7 +162,7 @@ contract Web3Campaigns is
         bool _completed,
         uint256 _deadline,
         bytes calldata _signature
-    ) public override whenNotPaused {
+    ) public override whenNotPaused nonReentrant {
         super.verifyTaskCompletionWithSignature(
             _campaignId, _participant, _taskIndex, _completed, _deadline, _signature
         );
@@ -176,7 +176,7 @@ contract Web3Campaigns is
         bool[] calldata _completedFlags,
         uint256[] calldata _deadlines,
         bytes[] calldata _signatures
-    ) public override whenNotPaused {
+    ) public override whenNotPaused nonReentrant {
         super.batchVerifyTaskCompletionWithSignatures(
             _campaignId, _participants, _taskIndices, _completedFlags, _deadlines, _signatures
         );

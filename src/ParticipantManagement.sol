@@ -145,6 +145,17 @@ contract ParticipantManagement is CampaignStorage {
         uint256 _deadline,
         bytes calldata _signature
     ) public virtual {
+        _verifySingleTaskCompletion(_campaignId, _participant, _taskIndex, _completed, _deadline, _signature);
+    }
+
+    function _verifySingleTaskCompletion(
+        uint256 _campaignId,
+        address _participant,
+        uint256 _taskIndex,
+        bool _completed,
+        uint256 _deadline,
+        bytes calldata _signature
+    ) internal {
         if (_participant == address(0)) {
             revert Web3Campaigns__ZeroAddress();
         }
@@ -233,7 +244,7 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         for (uint256 i; i < length; ++i) {
-            verifyTaskCompletionWithSignature(
+            _verifySingleTaskCompletion(
                 _campaignId, _participants[i], _taskIndices[i], _completedFlags[i], _deadlines[i], _signatures[i]
             );
         }
@@ -291,7 +302,7 @@ contract ParticipantManagement is CampaignStorage {
             return;
         }
 
-        bool hasAllRequired = _nowCompleted && _hasCompletedAllRequiredTasks(_campaignId, _participant);
+        bool hasAllRequired = _hasCompletedAllRequiredTasks(_campaignId, _participant);
         IOnChainRewardModule(module)
             .notifyTaskCompletion(_campaignId, _participant, _taskIndex, _nowCompleted, hasAllRequired);
     }
@@ -402,7 +413,11 @@ contract ParticipantManagement is CampaignStorage {
         if (_erc20Swept[_campaignId]) {
             revert Web3Campaigns__AlreadySwept();
         }
+        if (_erc20SettlementClaimed[_campaignId][_participant]) {
+            revert Web3Campaigns__AlreadyClaimedSettlement();
+        }
 
+        _erc20SettlementClaimed[_campaignId][_participant] = true;
         uint256 newDistributed = _erc20Distributed[_campaignId] + _amount;
         if (newDistributed > _erc20Escrowed[_campaignId]) {
             revert Web3Campaigns__InsufficientEscrow();

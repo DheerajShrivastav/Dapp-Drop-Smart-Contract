@@ -174,7 +174,9 @@ contract OnChainRewardModule is IOnChainRewardModule {
                 }
             }
         } else {
-            _currentlyQualified[campaignId][participant] = false;
+            if (!hasAllRequired) {
+                _currentlyQualified[campaignId][participant] = false;
+            }
         }
     }
 
