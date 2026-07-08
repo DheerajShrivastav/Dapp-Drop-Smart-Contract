@@ -17,7 +17,7 @@ Active development on branch **`fix/per-campaign-module-pinning`** (forked from 
 
 The contract is **escrow + verify + Merkle-settle**. There is no live mid-campaign claim path. Off-chain rewards remain informational only.
 
-Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **104 tests passing** (10 suites, including 3 stateful-fuzz invariant suites) on `fix/per-campaign-module-pinning`. Build clean, `forge fmt --check` clean. Contract size 21.7KB runtime (24.576KB limit — ~2.9KB headroom; watch this closely on future features, e.g. the still-open protocol-fee item).
+Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **107 tests passing** (10 suites, including 3 stateful-fuzz invariant suites) on `fix/per-campaign-module-pinning`. Build clean, `forge fmt --check` clean. Contract size 23.5KB runtime (24.576KB limit — ~1.0KB headroom; watch this closely on future features, e.g. the still-open protocol-fee item).
 
 Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **Merkle settlement after campaign end** is the reward claim model (not live mid-campaign); **`grantHostRole` stays open/unguarded** intentionally for now; **signature verification replaces** (not runs alongside) host-tx verification; **single `SIGNER_ROLE`** for now (no N-of-M threshold yet); replay guard = per-task version counter, which doubles as an update/reverification mechanism; **`cancelCampaign` requires zero participants** (no partial-cancel-after-engagement escape hatch).
 
