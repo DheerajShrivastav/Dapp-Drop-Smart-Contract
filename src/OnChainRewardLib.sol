@@ -125,46 +125,6 @@ library OnChainRewardLib {
         return 0;
     }
 
-    /// @dev Consolidates the RANK_TIERED/SCORE_TIERED branch + tier lookup + escrow-accounting
-    /// check for claimERC20OnChain into one library call (fewer call-site boundaries than
-    /// separately branching in the caller and calling matchRankTier/matchScoreTier individually).
-    /// Reverts NoTierMatched / InsufficientEscrow directly so the caller only needs to apply the
-    /// effects (mark claimed, write distributed, transfer) after this returns.
-    /// @param _mode RANK_TIERED or SCORE_TIERED (caller has already excluded MERKLE/UNSET)
-    /// @param _rank Caller's completion rank (only meaningful for RANK_TIERED)
-    /// @param _score Caller's participant score (only meaningful for SCORE_TIERED)
-    /// @param _escrowed Campaign's total escrowed amount
-    /// @param _distributed Campaign's total distributed-so-far amount
-    /// @return amount The tier-matched reward amount
-    /// @return rankOrScore Whichever of rank/score was actually used (for the claim event)
-    /// @return newDistributed `_distributed + amount`, already validated against `_escrowed`
-    function resolveOnChainClaim(
-        CampaignStorage.ERC20SettlementMode _mode,
-        CampaignStorage.RankTier[] storage _rankTiers,
-        CampaignStorage.ScoreTier[] storage _scoreTiers,
-        uint256 _rank,
-        uint256 _score,
-        uint256 _escrowed,
-        uint256 _distributed
-    ) public view returns (uint256 amount, uint256 rankOrScore, uint256 newDistributed) {
-        if (_mode == CampaignStorage.ERC20SettlementMode.RANK_TIERED) {
-            rankOrScore = _rank;
-            amount = matchRankTier(_rankTiers, _rank);
-        } else {
-            rankOrScore = _score;
-            amount = matchScoreTier(_scoreTiers, _score);
-        }
-
-        if (amount == 0) {
-            revert CampaignStorage.Web3Campaigns__NoTierMatched();
-        }
-
-        newDistributed = _distributed + amount;
-        if (newDistributed > _escrowed) {
-            revert CampaignStorage.Web3Campaigns__InsufficientEscrow();
-        }
-    }
-
     /// @dev Validates and writes per-task point values for SCORE_TIERED scoring. `_taskCount` is
     /// passed by VALUE (campaign.tasks.length, a plain uint256), not by storage reference -- this
     /// avoids ever touching the Campaign struct's CampaignTask[] itself (whose dynamic string/bytes

@@ -660,6 +660,49 @@ contract OnChainRewardModuleTest is Test {
         assertEq(scoreAfterRevoke, 0);
     }
 
+    /// @notice Regression for the notify-routing desync: a completion after the global default is
+    /// rotated mid-campaign is bookkept by the campaign's PINNED module, not the rotated-in global
+    /// one -- so rank/score/qualification state stays with the module that will settle the claim.
+    /// Before the fix (notify read the global _onChainRewardModule) this state landed on the wrong
+    /// module and the pinned module's claim would see the participant as unranked/unqualified.
+    function test_Notify_RoutesToPinnedModuleAfterGlobalRotation() public {
+        (uint256 id, uint256 startTime,) = _draftCampaign();
+        _addSocialTask(id);
+
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory startRanks = new uint256[](1);
+        uint256[] memory endRanks = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        startRanks[0] = 1;
+        endRanks[0] = 5;
+        amounts[0] = 50 ether;
+        vm.prank(host1);
+        module.setRankTiers(id, startRanks, endRanks, amounts); // pins `module` (A)
+
+        _fundEscrow(id, 50 ether);
+        _openCampaign(id, startTime);
+
+        // Admin rotates the GLOBAL default to a different module B; the campaign stays pinned to A.
+        OnChainRewardModule b = new OnChainRewardModule(address(campaigns));
+        vm.prank(deployer);
+        campaigns.setOnChainRewardModule(address(b));
+
+        // The completion must be recorded by the pinned module A...
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+
+        (, uint256 rankA,, bool qualifiedA,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(rankA, 1);
+        assertTrue(qualifiedA);
+
+        // ...and NOT by the rotated-in global module B.
+        (, uint256 rankB,, bool qualifiedB,) = b.getOnChainRewardStatus(id, participant1);
+        assertEq(rankB, 0);
+        assertFalse(qualifiedB);
+    }
+
     function _attestationDigest(
         uint256 campaignId,
         address participant,

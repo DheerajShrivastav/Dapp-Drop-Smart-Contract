@@ -280,7 +280,13 @@ contract ParticipantManagement is CampaignStorage {
         if (mode != ERC20SettlementMode.RANK_TIERED && mode != ERC20SettlementMode.SCORE_TIERED) {
             return;
         }
-        address module = _onChainRewardModule;
+        // Route to the campaign's PINNED module, not the rotatable global _onChainRewardModule.
+        // A tiered campaign is always pinned at adoption (setSettlementMode), so this is non-zero
+        // here; using it keeps completion/revocation bookkeeping consistent with the pin that
+        // payOnChainReward and claimReward authorize against, so an admin rotation of the global
+        // default cannot divert an in-flight campaign's rank/score state to a non-authoritative
+        // module. The zero-check remains a defensive guard.
+        address module = _campaignRewardModule[_campaignId];
         if (module == address(0)) {
             return;
         }
