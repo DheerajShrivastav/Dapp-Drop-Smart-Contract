@@ -359,14 +359,16 @@ contract NFTSettlementTest is Test {
         assertEq(nft721.ownerOf(1), p1);
     }
 
-    /// @notice Re-publishing the NFT root rearms the dispute window from scratch, mirroring the
-    /// ERC20 path.
+    /// @notice Re-publishing a GENUINELY DIFFERENT NFT root rearms the dispute window from scratch,
+    /// mirroring the ERC20 path.
     function test_ClaimNFT_RootUpdateRearmsDisputeWindow() public {
         bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
-        uint256 id = _setup721(_ids(1), root); // original window already elapsed
+        uint256 id = _setup721(_ids2(1, 2), root); // escrow two tokenIds; original window elapsed
 
+        // Republish allocating tokenId 2 instead of 1 -- a genuinely different root.
+        bytes32 newRoot = _nftLeaf(p1, 0, address(nft721), 2, 1);
         vm.prank(host1);
-        campaigns.setNFTMerkleRoot(id, root); // republish (e.g. a correction)
+        campaigns.setNFTMerkleRoot(id, newRoot);
 
         uint256 claimableAt = campaigns.getNFTClaimableAt(id);
         assertEq(claimableAt, block.timestamp + campaigns.ROOT_DISPUTE_WINDOW());
@@ -375,9 +377,27 @@ contract NFTSettlementTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
         );
-        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 2, 1, _emptyProof());
 
         vm.warp(claimableAt);
+        vm.prank(p1);
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 2, 1, _emptyProof());
+        assertEq(nft721.ownerOf(2), p1);
+    }
+
+    /// @notice Republishing the BYTE-IDENTICAL NFT root is a no-op for the dispute window --
+    /// mirrors the ERC20 path's guard against indefinite self-stalling via a no-op republish.
+    function test_ClaimNFT_SameRootRepublishDoesNotRearmWindow() public {
+        bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        uint256 id = _setup721(_ids(1), root); // original window already elapsed
+
+        uint256 claimableAtBefore = campaigns.getNFTClaimableAt(id);
+
+        vm.prank(host1);
+        campaigns.setNFTMerkleRoot(id, root); // no-op republish, byte-identical value
+
+        assertEq(campaigns.getNFTClaimableAt(id), claimableAtBefore, "no-op republish must not rearm the window");
+
         vm.prank(p1);
         campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
         assertEq(nft721.ownerOf(1), p1);

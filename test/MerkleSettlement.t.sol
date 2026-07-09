@@ -405,16 +405,18 @@ contract MerkleSettlementTest is Test {
         assertEq(token.balanceOf(participant1), amount);
     }
 
-    /// @notice Re-publishing the root (e.g. a host correcting an allocation) REARMS the dispute
-    /// window from scratch, even though the campaign's original window had already elapsed --
-    /// every publish deserves its own review period.
+    /// @notice Re-publishing a GENUINELY DIFFERENT root (e.g. a host correcting an allocation)
+    /// REARMS the dispute window from scratch, even though the campaign's original window had
+    /// already elapsed -- every real change deserves its own review period.
     function test_ClaimERC20_RootUpdateRearmsDisputeWindow() public {
         uint256 amount = 100 ether;
         bytes32 root = _leaf(participant1, amount);
         uint256 id = _endedCampaignWithRoot(root, amount); // original window already elapsed
 
+        uint256 newAmount = 90 ether;
+        bytes32 newRoot = _leaf(participant1, newAmount);
         vm.prank(host1);
-        campaigns.setERC20MerkleRoot(id, root); // republish (e.g. a correction)
+        campaigns.setERC20MerkleRoot(id, newRoot); // republish with a different allocation
 
         uint256 claimableAt = campaigns.getERC20ClaimableAt(id);
         assertEq(claimableAt, block.timestamp + campaigns.ROOT_DISPUTE_WINDOW());
@@ -424,9 +426,31 @@ contract MerkleSettlementTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
         );
-        campaigns.claimERC20(id, amount, proof);
+        campaigns.claimERC20(id, newAmount, proof);
 
         vm.warp(claimableAt);
+        vm.prank(participant1);
+        campaigns.claimERC20(id, newAmount, proof);
+        assertEq(token.balanceOf(participant1), newAmount);
+    }
+
+    /// @notice Republishing the BYTE-IDENTICAL root is a no-op for the dispute window -- it must
+    /// NOT rearm, since there is nothing new for participants to review. Without this guard, a host
+    /// could indefinitely stall a published root's claims by repeatedly "updating" to the same value.
+    function test_ClaimERC20_SameRootRepublishDoesNotRearmWindow() public {
+        uint256 amount = 100 ether;
+        bytes32 root = _leaf(participant1, amount);
+        uint256 id = _endedCampaignWithRoot(root, amount); // original window already elapsed
+
+        uint256 claimableAtBefore = campaigns.getERC20ClaimableAt(id);
+
+        vm.prank(host1);
+        campaigns.setERC20MerkleRoot(id, root); // no-op republish, byte-identical value
+
+        assertEq(campaigns.getERC20ClaimableAt(id), claimableAtBefore, "no-op republish must not rearm the window");
+
+        // Window already elapsed before the republish -- claim succeeds immediately, no revert.
+        bytes32[] memory proof = new bytes32[](0);
         vm.prank(participant1);
         campaigns.claimERC20(id, amount, proof);
         assertEq(token.balanceOf(participant1), amount);

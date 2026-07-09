@@ -84,8 +84,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // participants/the community time to verify the off-chain allocation and escalate (e.g. via
     // EMERGENCY_ADMIN's emergencyPause) before any funds move against a potentially unfair root.
     // This is a delay-based mitigation, not a full on-chain dispute-resolution system -- see
-    // docs/SECURITY_FINDINGS.md. Every (re-)publish rearms the window from scratch, including a
-    // host's own correction, since an updated allocation deserves its own review period too.
+    // docs/SECURITY_FINDINGS.md. Publishing a NEW root value rearms the window from scratch,
+    // including a host's own correction, since an updated allocation deserves its own review
+    // period too -- but a no-op republish of the byte-identical root does NOT rearm, since there is
+    // nothing new to review (otherwise a host could indefinitely stall a published root's claims).
     // Must stay well below CLAIM_GRACE_PERIOD: a sweep is only reachable Closed + that grace period
     // after closing, and root updates are only allowed while Ended (frozen at Closed) -- so as long
     // as this ordering holds, the dispute window on the final root has always long since elapsed by

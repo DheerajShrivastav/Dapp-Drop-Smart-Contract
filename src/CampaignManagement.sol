@@ -265,8 +265,10 @@ contract CampaignManagement is CampaignStorage {
      * @dev Only after the campaign has Ended. The root commits to leaves of
      *      keccak256(bytes.concat(keccak256(abi.encode(account, amount)))) — the
      *      OpenZeppelin StandardMerkleTree format. Updatable while Ended (e.g. to fix an
-     *      allocation); frozen once the campaign is Closed. Every (re-)publish rearms
-     *      ROOT_DISPUTE_WINDOW: claimERC20 rejects claims against this root until it elapses.
+     *      allocation); frozen once the campaign is Closed. Publishing a NEW root value rearms
+     *      ROOT_DISPUTE_WINDOW (claimERC20 rejects claims against it until the window elapses); a
+     *      no-op republish of the byte-identical root does not rearm, since there is nothing new
+     *      for participants to review.
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
@@ -288,8 +290,13 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__MerkleRootNotSet();
         }
 
+        // Only rearm the dispute window if the root is actually changing -- a no-op republish of
+        // the byte-identical root gives participants nothing new to review, so it must not let a
+        // host indefinitely push out claimableAt while a real root sits published.
+        if (_erc20MerkleRoot[_campaignId] != _merkleRoot) {
+            _erc20RootSetAt[_campaignId] = uint64(block.timestamp);
+        }
         _erc20MerkleRoot[_campaignId] = _merkleRoot;
-        _erc20RootSetAt[_campaignId] = uint64(block.timestamp);
         emit ERC20MerkleRootSet(_campaignId, _merkleRoot);
     }
 
@@ -429,8 +436,9 @@ contract CampaignManagement is CampaignStorage {
      * @notice Publish (or update) the NFT reward Merkle root for settlement.
      * @dev Only after the campaign has Ended. Leaf format:
      *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
-     *      Updatable while Ended, frozen at Closed. Every (re-)publish rearms ROOT_DISPUTE_WINDOW:
-     *      claimNFT rejects claims against this root until it elapses.
+     *      Updatable while Ended, frozen at Closed. Publishing a NEW root value rearms
+     *      ROOT_DISPUTE_WINDOW (claimNFT rejects claims against it until the window elapses); a
+     *      no-op republish of the byte-identical root does not rearm.
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
@@ -444,8 +452,12 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__MerkleRootNotSet();
         }
 
+        // Only rearm the dispute window if the root is actually changing -- see the identical
+        // comment in setERC20MerkleRoot.
+        if (_nftMerkleRoot[_campaignId] != _merkleRoot) {
+            _nftRootSetAt[_campaignId] = uint64(block.timestamp);
+        }
         _nftMerkleRoot[_campaignId] = _merkleRoot;
-        _nftRootSetAt[_campaignId] = uint64(block.timestamp);
         emit NFTMerkleRootSet(_campaignId, _merkleRoot);
     }
 

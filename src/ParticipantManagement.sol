@@ -350,7 +350,7 @@ contract ParticipantManagement is CampaignStorage {
             revert Web3Campaigns__MerkleRootNotSet();
         }
         // Dispute window: gives the community time to catch an unfair root before any funds move
-        // against it. Rearmed by every (re-)publish, including a host's own correction.
+        // against it. Rearmed only when the published root VALUE actually changes (including a host's own correction), not by a no-op republish.
         uint256 claimableAt = _erc20RootSetAt[_campaignId] + ROOT_DISPUTE_WINDOW;
         if (block.timestamp < claimableAt) {
             revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
@@ -470,7 +470,7 @@ contract ParticipantManagement is CampaignStorage {
             revert Web3Campaigns__MerkleRootNotSet();
         }
         // Dispute window: gives the community time to catch an unfair root before any NFTs move
-        // against it. Rearmed by every (re-)publish, including a host's own correction.
+        // against it. Rearmed only when the published root VALUE actually changes (including a host's own correction), not by a no-op republish.
         uint256 claimableAt = _nftRootSetAt[_campaignId] + ROOT_DISPUTE_WINDOW;
         if (block.timestamp < claimableAt) {
             revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
