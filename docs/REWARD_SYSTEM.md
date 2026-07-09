@@ -20,10 +20,10 @@ Host flow (CampaignManagement.sol):
 5. `withdrawUnclaimedERC20(id)` — after Closed + `CLAIM_GRACE_PERIOD` (30 days); sweeps `escrowed - distributed` to host; single-sweep guarded by `_erc20Swept`.
 
 Participant claim (ParticipantManagement.sol):
-- `claimERC20(id, amount, proof)` — status Ended or Closed; **reverts `AlreadySwept` if the campaign's unclaimed escrow has already been swept back to the host** (prevents a late claim from draining another campaign's commingled ERC20 escrow — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3); requires root set; one claim per account (`_erc20SettlementClaimed`); leaf is the **OZ StandardMerkleTree** format `keccak256(bytes.concat(keccak256(abi.encode(account, amount))))`; verified with OZ `MerkleProof.verify`; escrow-accounted (`InsufficientEscrow` if `distributed + amount > escrowed`); pays via `safeTransfer` from escrow. `nonReentrant + whenNotPaused` (Web3Campaigns wrapper).
+- `claimERC20(id, amount, proof)` — status Ended or Closed; **reverts `AlreadySwept` if the campaign's unclaimed escrow has already been swept back to the host** (prevents a late claim from draining another campaign's commingled ERC20 escrow — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3); requires root set; **reverts `RootDisputeWindowActive` until `ROOT_DISPUTE_WINDOW` (24h) has elapsed since the root was last (re-)published** (allocation-fairness mitigation — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #14); one claim per account (`_erc20SettlementClaimed`); leaf is the **OZ StandardMerkleTree** format `keccak256(bytes.concat(keccak256(abi.encode(account, amount))))`; verified with OZ `MerkleProof.verify`; escrow-accounted (`InsufficientEscrow` if `distributed + amount > escrowed`); pays via `safeTransfer` from escrow. `nonReentrant + whenNotPaused` (Web3Campaigns wrapper).
 - Off-chain tooling must build the tree with `@openzeppelin/merkle-tree` using leaf encoding `["address","uint256"]` to match.
 
-Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`.
+Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`; `getERC20ClaimableAt(id)` → timestamp claims open (0 if no root yet).
 
 ## ERC20 on-chain tiered settlement (RANK_TIERED / SCORE_TIERED) — dispute-free alternative
 
@@ -45,10 +45,14 @@ Host flow (CampaignManagement.sol):
 3. `withdrawUnclaimedERC721(id, token, tokenIds[])` / `withdrawUnclaimedERC1155(id, token, ids[], amounts[])` — reclaim still-escrowed NFTs after Closed + grace.
 
 Participant claim (ParticipantManagement.sol):
-- `claimNFT(id, standard, token, tokenId, amount, proof)` — status Ended/Closed; leaf `keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount))))`; per-leaf claim guard (`_nftLeafClaimed`); decrements per-campaign escrow (reverts `NFTNotEscrowed` if not held); ERC721 via `safeTransferFrom`, ERC1155 via `safeTransferFrom(...,amount,"")`. `nonReentrant + whenNotPaused`.
+- `claimNFT(id, standard, token, tokenId, amount, proof)` — status Ended/Closed; leaf `keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount))))`; **reverts `RootDisputeWindowActive` until `ROOT_DISPUTE_WINDOW` (24h) has elapsed since the root was last (re-)published** (same mitigation as the ERC20 path — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #14); per-leaf claim guard (`_nftLeafClaimed`); decrements per-campaign escrow (reverts `NFTNotEscrowed` if not held); ERC721 via `safeTransferFrom`, ERC1155 via `safeTransferFrom(...,amount,"")`. `nonReentrant + whenNotPaused`.
 - Off-chain tooling builds the tree with leaf encoding `["address","uint8","address","uint256","uint256"]`.
 
-Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`.
+Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`, `getNFTClaimableAt(id)` → timestamp claims open (0 if no root yet).
+
+## Allocation-fairness dispute window (applies to both ERC20 and NFT roots)
+
+`setERC20MerkleRoot`/`setNFTMerkleRoot` record when a root was last (re-)published; `claimERC20`/`claimNFT` reject claims until `ROOT_DISPUTE_WINDOW` (24h, `CampaignStorage`) has elapsed since that timestamp. Every (re-)publish — including a host correcting a bad allocation — rearms the window from scratch. This is a delay-based mitigation giving the community time to catch an unfair root and escalate (e.g. `emergencyPause`) before funds move; there is no on-chain flagging/veto mechanism. Sweeps need no separate gating: they require `Closed` + `CLAIM_GRACE_PERIOD` (30 days), which already dominates the 24h window since roots freeze at `Closed`. Full rationale and limitations: [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #14.
 
 ## Cancellation refund (`cancelCampaign`)
 
