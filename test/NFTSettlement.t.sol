@@ -107,6 +107,8 @@ contract NFTSettlementTest is Test {
         campaigns.endCampaign(id);
         vm.prank(host1);
         campaigns.setNFTMerkleRoot(id, root);
+
+        vm.warp(block.timestamp + campaigns.ROOT_DISPUTE_WINDOW() + 1);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -189,6 +191,7 @@ contract NFTSettlementTest is Test {
         bytes32 rootB = _nftLeaf(attacker, 0, address(nft721), 1, 1);
         vm.prank(attacker);
         campaigns.setNFTMerkleRoot(idB, rootB);
+        vm.warp(block.timestamp + campaigns.ROOT_DISPUTE_WINDOW() + 1);
 
         // Valid proof for campaign B's tree, but the token isn't escrowed under B.
         vm.prank(attacker);
@@ -222,6 +225,7 @@ contract NFTSettlementTest is Test {
         bytes32 root = _nftLeaf(p1, 1, address(nft1155), 1, 30);
         vm.prank(host1);
         campaigns.setNFTMerkleRoot(id, root);
+        vm.warp(block.timestamp + campaigns.ROOT_DISPUTE_WINDOW() + 1);
 
         assertEq(campaigns.getERC1155Escrowed(id, address(nft1155), 1), 100);
 
@@ -253,6 +257,7 @@ contract NFTSettlementTest is Test {
         bytes32 root = _nftLeaf(p1, 1, address(nft1155), 1, 50); // tree over-allocates
         vm.prank(host1);
         campaigns.setNFTMerkleRoot(id, root);
+        vm.warp(block.timestamp + campaigns.ROOT_DISPUTE_WINDOW() + 1);
 
         vm.prank(p1);
         vm.expectRevert(CampaignStorage.Web3Campaigns__NFTNotEscrowed.selector);
@@ -312,5 +317,76 @@ contract NFTSettlementTest is Test {
         vm.prank(host1);
         vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotYetEnded.selector);
         campaigns.setNFTMerkleRoot(id, bytes32(uint256(1)));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          ROOT DISPUTE WINDOW
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice A freshly-published NFT root cannot be claimed against until ROOT_DISPUTE_WINDOW has
+    /// elapsed -- mirrors the ERC20 path's dispute window (see MerkleSettlement.t.sol).
+    function test_ClaimNFT_RevertsDuringDisputeWindow() public {
+        bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
+
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, endTime);
+        nft721.setApprovalForAll(address(campaigns), true);
+        campaigns.depositERC721Rewards(id, address(nft721), _ids(1));
+        vm.stopPrank();
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(id);
+        vm.warp(endTime + 1);
+        vm.prank(host1);
+        campaigns.endCampaign(id);
+        vm.prank(host1);
+        campaigns.setNFTMerkleRoot(id, root);
+
+        uint256 claimableAt = block.timestamp + campaigns.ROOT_DISPUTE_WINDOW();
+        assertEq(campaigns.getNFTClaimableAt(id), claimableAt);
+
+        vm.prank(p1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
+        );
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+
+        vm.warp(claimableAt);
+        vm.prank(p1);
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+        assertEq(nft721.ownerOf(1), p1);
+    }
+
+    /// @notice Re-publishing the NFT root rearms the dispute window from scratch, mirroring the
+    /// ERC20 path.
+    function test_ClaimNFT_RootUpdateRearmsDisputeWindow() public {
+        bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        uint256 id = _setup721(_ids(1), root); // original window already elapsed
+
+        vm.prank(host1);
+        campaigns.setNFTMerkleRoot(id, root); // republish (e.g. a correction)
+
+        uint256 claimableAt = campaigns.getNFTClaimableAt(id);
+        assertEq(claimableAt, block.timestamp + campaigns.ROOT_DISPUTE_WINDOW());
+
+        vm.prank(p1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
+        );
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+
+        vm.warp(claimableAt);
+        vm.prank(p1);
+        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+        assertEq(nft721.ownerOf(1), p1);
+    }
+
+    function test_GetNFTClaimableAt_ZeroBeforeRootSet() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        assertEq(campaigns.getNFTClaimableAt(id), 0);
     }
 }

@@ -59,7 +59,8 @@ contract MerkleSettlementTest is Test {
                                SETUP HELPER
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Create -> configure -> fund -> open -> end -> set root. Returns campaign id.
+    /// @dev Create -> configure -> fund -> open -> end -> set root -> past the dispute window
+    /// (claims are open). Returns campaign id.
     function _endedCampaignWithRoot(bytes32 root, uint256 fundAmount) internal returns (uint256 id) {
         uint256 startTime = block.timestamp + START_OFFSET;
         uint256 endTime = startTime + CAMPAIGN_DURATION;
@@ -81,6 +82,8 @@ contract MerkleSettlementTest is Test {
 
         vm.prank(host1);
         campaigns.setERC20MerkleRoot(id, root);
+
+        vm.warp(block.timestamp + campaigns.ROOT_DISPUTE_WINDOW() + 1);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -346,5 +349,93 @@ contract MerkleSettlementTest is Test {
         campaigns.claimERC20(idB, amount, proof);
         assertEq(token.balanceOf(participant2), amount);
         assertEq(token.balanceOf(address(campaigns)), 0);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          ROOT DISPUTE WINDOW
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice A freshly-published root cannot be claimed against until ROOT_DISPUTE_WINDOW has
+    /// elapsed -- gives the community time to catch an unfair allocation before funds move.
+    function test_ClaimERC20_RevertsDuringDisputeWindow() public {
+        uint256 amount = 100 ether;
+        bytes32 root = _leaf(participant1, amount);
+
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, endTime);
+        campaigns.configureERC20Reward(id, address(token));
+        token.approve(address(campaigns), amount);
+        campaigns.fundCampaignERC20(id, amount);
+        vm.stopPrank();
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(id);
+        vm.warp(endTime + 1);
+        vm.prank(host1);
+        campaigns.endCampaign(id);
+        vm.prank(host1);
+        campaigns.setERC20MerkleRoot(id, root);
+
+        uint256 claimableAt = block.timestamp + campaigns.ROOT_DISPUTE_WINDOW();
+        assertEq(campaigns.getERC20ClaimableAt(id), claimableAt);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        // Immediately after publishing: still inside the window.
+        vm.prank(participant1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
+        );
+        campaigns.claimERC20(id, amount, proof);
+
+        // One second before it elapses: still reverts.
+        vm.warp(claimableAt - 1);
+        vm.prank(participant1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
+        );
+        campaigns.claimERC20(id, amount, proof);
+
+        // Exactly at claimableAt: succeeds.
+        vm.warp(claimableAt);
+        vm.prank(participant1);
+        campaigns.claimERC20(id, amount, proof);
+        assertEq(token.balanceOf(participant1), amount);
+    }
+
+    /// @notice Re-publishing the root (e.g. a host correcting an allocation) REARMS the dispute
+    /// window from scratch, even though the campaign's original window had already elapsed --
+    /// every publish deserves its own review period.
+    function test_ClaimERC20_RootUpdateRearmsDisputeWindow() public {
+        uint256 amount = 100 ether;
+        bytes32 root = _leaf(participant1, amount);
+        uint256 id = _endedCampaignWithRoot(root, amount); // original window already elapsed
+
+        vm.prank(host1);
+        campaigns.setERC20MerkleRoot(id, root); // republish (e.g. a correction)
+
+        uint256 claimableAt = campaigns.getERC20ClaimableAt(id);
+        assertEq(claimableAt, block.timestamp + campaigns.ROOT_DISPUTE_WINDOW());
+
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(participant1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector, id, claimableAt)
+        );
+        campaigns.claimERC20(id, amount, proof);
+
+        vm.warp(claimableAt);
+        vm.prank(participant1);
+        campaigns.claimERC20(id, amount, proof);
+        assertEq(token.balanceOf(participant1), amount);
+    }
+
+    function test_GetERC20ClaimableAt_ZeroBeforeRootSet() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        assertEq(campaigns.getERC20ClaimableAt(id), 0);
     }
 }
