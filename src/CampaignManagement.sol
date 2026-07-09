@@ -265,7 +265,8 @@ contract CampaignManagement is CampaignStorage {
      * @dev Only after the campaign has Ended. The root commits to leaves of
      *      keccak256(bytes.concat(keccak256(abi.encode(account, amount)))) — the
      *      OpenZeppelin StandardMerkleTree format. Updatable while Ended (e.g. to fix an
-     *      allocation); frozen once the campaign is Closed.
+     *      allocation); frozen once the campaign is Closed. Every (re-)publish rearms
+     *      ROOT_DISPUTE_WINDOW: claimERC20 rejects claims against this root until it elapses.
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
@@ -288,6 +289,7 @@ contract CampaignManagement is CampaignStorage {
         }
 
         _erc20MerkleRoot[_campaignId] = _merkleRoot;
+        _erc20RootSetAt[_campaignId] = uint64(block.timestamp);
         emit ERC20MerkleRootSet(_campaignId, _merkleRoot);
     }
 
@@ -427,7 +429,8 @@ contract CampaignManagement is CampaignStorage {
      * @notice Publish (or update) the NFT reward Merkle root for settlement.
      * @dev Only after the campaign has Ended. Leaf format:
      *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
-     *      Updatable while Ended, frozen at Closed.
+     *      Updatable while Ended, frozen at Closed. Every (re-)publish rearms ROOT_DISPUTE_WINDOW:
+     *      claimNFT rejects claims against this root until it elapses.
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
@@ -442,6 +445,7 @@ contract CampaignManagement is CampaignStorage {
         }
 
         _nftMerkleRoot[_campaignId] = _merkleRoot;
+        _nftRootSetAt[_campaignId] = uint64(block.timestamp);
         emit NFTMerkleRootSet(_campaignId, _merkleRoot);
     }
 

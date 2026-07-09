@@ -160,6 +160,21 @@ contract CampaignViewFunctions is CampaignStorage {
     }
 
     /**
+     * @notice When claimERC20 will start accepting claims against the currently-published ERC20
+     *         root, per ROOT_DISPUTE_WINDOW.
+     * @dev Returns 0 if no root has ever been published for this campaign. A nonzero value in the
+     *      past means the window has already elapsed and claims are open now.
+     * @param _campaignId Campaign ID
+     */
+    function getERC20ClaimableAt(uint256 _campaignId) external view returns (uint256) {
+        uint64 setAt = _erc20RootSetAt[_campaignId];
+        if (setAt == 0) {
+            return 0;
+        }
+        return setAt + ROOT_DISPUTE_WINDOW;
+    }
+
+    /**
      * @notice The OnChainRewardModule instance pinned as authoritative for a campaign.
      * @dev address(0) until the campaign first adopts an on-chain (RANK_TIERED / SCORE_TIERED)
      *      settlement mode, at which point it is pinned to the then-current module and never
@@ -177,6 +192,21 @@ contract CampaignViewFunctions is CampaignStorage {
      */
     function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {
         return _nftMerkleRoot[_campaignId];
+    }
+
+    /**
+     * @notice When claimNFT will start accepting claims against the currently-published NFT root,
+     *         per ROOT_DISPUTE_WINDOW.
+     * @dev Returns 0 if no root has ever been published for this campaign. A nonzero value in the
+     *      past means the window has already elapsed and claims are open now.
+     * @param _campaignId Campaign ID
+     */
+    function getNFTClaimableAt(uint256 _campaignId) external view returns (uint256) {
+        uint64 setAt = _nftRootSetAt[_campaignId];
+        if (setAt == 0) {
+            return 0;
+        }
+        return setAt + ROOT_DISPUTE_WINDOW;
     }
 
     /**

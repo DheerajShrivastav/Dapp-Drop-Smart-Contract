@@ -43,6 +43,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__ERC20RewardNotConfigured();
     error Web3Campaigns__InsufficientEscrow();
     error Web3Campaigns__MerkleRootNotSet();
+    error Web3Campaigns__RootDisputeWindowActive(uint256 campaignId, uint256 claimableAt);
     error Web3Campaigns__InvalidMerkleProof();
     error Web3Campaigns__AlreadyClaimedSettlement();
     error Web3Campaigns__GracePeriodActive();
@@ -79,6 +80,17 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     uint256 public constant MAX_BATCH_SIZE = 50;
     // Grace window after a campaign is Closed before the host may sweep unclaimed escrow
     uint256 public constant CLAIM_GRACE_PERIOD = 30 days;
+    // Window after a Merkle root is (re-)published before claims against it are allowed. Gives
+    // participants/the community time to verify the off-chain allocation and escalate (e.g. via
+    // EMERGENCY_ADMIN's emergencyPause) before any funds move against a potentially unfair root.
+    // This is a delay-based mitigation, not a full on-chain dispute-resolution system -- see
+    // docs/SECURITY_FINDINGS.md. Every (re-)publish rearms the window from scratch, including a
+    // host's own correction, since an updated allocation deserves its own review period too.
+    // Must stay well below CLAIM_GRACE_PERIOD: a sweep is only reachable Closed + that grace period
+    // after closing, and root updates are only allowed while Ended (frozen at Closed) -- so as long
+    // as this ordering holds, the dispute window on the final root has always long since elapsed by
+    // the time a sweep is possible.
+    uint256 public constant ROOT_DISPUTE_WINDOW = 24 hours;
 
     // EIP-712 typehash for a signed task-completion attestation. `version` is the per
     // (participant, campaign, task) attestation counter — it doubles as the leaf's replay
@@ -203,6 +215,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     mapping(uint256 => uint256) internal _erc20Escrowed; // campaignId => total ERC20 escrowed
     mapping(uint256 => uint256) internal _erc20Distributed; // campaignId => total ERC20 claimed
     mapping(uint256 => bytes32) internal _erc20MerkleRoot; // campaignId => settlement root
+    mapping(uint256 => uint64) internal _erc20RootSetAt; // campaignId => timestamp root was last (re-)published
     mapping(uint256 => mapping(address => bool)) internal _erc20SettlementClaimed; // campaignId => account => claimed
     mapping(uint256 => uint64) internal _campaignClosedAt; // campaignId => close timestamp (grace start)
     mapping(uint256 => bool) internal _erc20Swept; // campaignId => unclaimed funds reclaimed by host
@@ -211,6 +224,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // NFTs are escrowed per-campaign (the ownership maps below prevent one campaign's
     // settlement from draining another's escrow), and distributed by Merkle proof after end.
     mapping(uint256 => bytes32) internal _nftMerkleRoot; // campaignId => NFT settlement root
+    mapping(uint256 => uint64) internal _nftRootSetAt; // campaignId => timestamp root was last (re-)published
     mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
     mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
     mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held

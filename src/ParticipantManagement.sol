@@ -349,6 +349,12 @@ contract ParticipantManagement is CampaignStorage {
         if (root == bytes32(0)) {
             revert Web3Campaigns__MerkleRootNotSet();
         }
+        // Dispute window: gives the community time to catch an unfair root before any funds move
+        // against it. Rearmed by every (re-)publish, including a host's own correction.
+        uint256 claimableAt = _erc20RootSetAt[_campaignId] + ROOT_DISPUTE_WINDOW;
+        if (block.timestamp < claimableAt) {
+            revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
+        }
         if (_erc20SettlementClaimed[_campaignId][msg.sender]) {
             revert Web3Campaigns__AlreadyClaimedSettlement();
         }
@@ -462,6 +468,12 @@ contract ParticipantManagement is CampaignStorage {
         bytes32 root = _nftMerkleRoot[_campaignId];
         if (root == bytes32(0)) {
             revert Web3Campaigns__MerkleRootNotSet();
+        }
+        // Dispute window: gives the community time to catch an unfair root before any NFTs move
+        // against it. Rearmed by every (re-)publish, including a host's own correction.
+        uint256 claimableAt = _nftRootSetAt[_campaignId] + ROOT_DISPUTE_WINDOW;
+        if (block.timestamp < claimableAt) {
+            revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
         }
 
         bytes32 leaf =
