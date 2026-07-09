@@ -1,6 +1,6 @@
 # Test Coverage & Build — Web3Campaigns
 
-> As of `feature/cancel-campaign` (forked from `dev` post-invariant-hardening merge).
+> As of `fix/per-campaign-module-pinning` (forked from `feature/onchain-reward-tiers`, itself off `dev` post-PR #4).
 
 ## Toolchain (now set up)
 
@@ -8,7 +8,7 @@ Foundry **1.7.1** installed (`~/.foundry/bin` — `export PATH="$HOME/.foundry/b
 
 To build/run from a clean clone: `git submodule update --init --recursive` → `forge build` → `forge test`.
 
-## Test suites (84 passing, 9 suites)
+## Test suites (107 passing, 10 suites)
 
 Unit/example-based:
 - `test/CampaignStorage.t.sol` (11) — lifecycle/access/batch/withdrawETH; batch task verification via `batchVerifyTaskCompletionWithSignatures`.
@@ -17,6 +17,7 @@ Unit/example-based:
 - `test/NFTSettlement.t.sol` (10) — ERC721/ERC1155 claims, double-claim, bad proof, pre-root, ERC1155 over-allocation, cross-campaign drain guard, deposit/custody, grace-gated sweep. Includes minimal mintable `MockERC721`/`MockERC1155` (reused by the NFT invariant handler).
 - `test/SignatureVerification.t.sol` (16) — happy path + participant-count invariant, anyone-can-submit, false-attestation-doesn't-count, campaign-status guards, task-not-found, signer rotation/revocation, domain isolation, batch atomicity, array-length/empty-batch reverts.
 - `test/CancelCampaign.t.sol` (9) — Draft/Open cancellation success, ERC20 refund, **the abuse vector closed** (`test_CancelCampaign_RevertsOnceAParticipantHasEngaged` — cancel blocked the moment one participant completes a task), status guards (Ended/already-Cancelled/not-host/paused), immediate NFT reclaim post-cancel (no grace wait). Includes a local minimal mintable `MockERC721Cancel`.
+- `test/OnChainRewardModule.t.sol` (23) — on-chain tiered settlement + per-campaign module pinning. RANK_TIERED/SCORE_TIERED end-to-end (first-completer top tier, double-claim, unranked/below-lowest-tier reverts, task-points→tier match; the score test straddles the 30s anti-spam cooldown between a participant's two completions), mode exclusivity (configuring a token does **not** foreclose tiered; a tiered campaign can't also set a Merkle root), access control (only-host tiers, only-module `setSettlementMode`/`payOnChainReward`, only-Web3Campaigns notify, only-admin rotate), signer-revocation-blocks-claim, and the pinning matrix — `payOnChainReward` succeeds from the pinned module (incl. **after the global default is rotated away**), reverts `RewardModuleMismatch` from a non-pinned/rotated-in address, unpinned campaign rejects every caller, and `claimReward` reverts `NotAuthoritativeModule` from a non-authoritative module. Also: **completion bookkeeping routes to the pinned module after a global-module rotation** (`test_Notify_RoutesToPinnedModuleAfterGlobalRotation` — the write-path desync regression), plus the score-underflow safety pair (`setTaskPoints` reverts once out of Draft; a complete→revoke round-trip restores score to exactly its pre-completion value).
 
 Stateful-fuzz invariant suites (`test/invariant/`) — each pairs a `*Handler.sol` (fuzzed actions + ghost accounting) with a `*.invariant.t.sol` (assertions):
 - **`EscrowSolvency.invariant.t.sol`** (3 invariants) — drives create/fund/settle → claim → sweep across many ERC20 campaigns sharing one reward token. **Found and pinned a real bug** (see `docs/SECURITY_FINDINGS.md` #3): `claimERC20` didn't check `_erc20Swept`, allowing a cross-campaign drain. Now fixed and asserted: `invariant_globalTokenAccounting`, `invariant_perCampaignBacked`, `invariant_distributedLeqEscrowed`.
@@ -30,12 +31,13 @@ Claim tests build real Merkle proofs via Solidity helpers matching the OZ Standa
 - Multi-leaf NFT proofs in the unit suite (current NFT unit tests use single-leaf roots; the invariant suite exercises many campaigns but each with its own single-leaf root) — a dedicated 2+ leaf NFT tree unit test would still add value.
 - No invariant coverage yet for the reward-configuration side (e.g., `configureERC20Reward`/deposit access control fuzzing) — current invariants focus on the settlement/claim/sweep lifecycle.
 - No dedicated invariant/fuzz test for `cancelCampaign` yet (unit tests only) — a candidate property: cancelling never leaves more ERC20 escrowed in the contract than `_erc20Escrowed[id]` (i.e., the refund always fully drains what was owed).
+- No invariant coverage for the on-chain tiered settlement path yet — `OnChainRewardModule` has 23 unit tests but no stateful-fuzz suite; candidate properties: `sum(on-chain claims) <= escrowed`, each participant can only claim once, rank assignment is strictly monotone (no duplicate ranks), and the pinned-module invariant (once pinned, `_campaignRewardModule[id]` never changes).
 
 ## Known issues
 - CI (`.github/workflows/test.yml`) runs `forge fmt --check`, `forge build --sizes`, `forge test -vvv` under `FOUNDRY_PROFILE=ci`, but `foundry.toml` defines no `[profile.ci]` (falls back to default). Cosmetic.
 - `actions/checkout@v4` in CI triggers a Node 20 deprecation warning — non-blocking, worth bumping to v5.
 - `block.timestamp` comparison lints (rate-limit/anti-spam) — informational.
-- **Contract size**: `Web3Campaigns` runtime is 21.7KB against the 24.576KB EIP-170 limit — ~2.9KB headroom (shrinking; watch closely, e.g. the still-open protocol-fee item will eat further into it). Check `forge build --sizes` before adding more logic to the entrypoint contract; consider splitting a new logic contract into the diamond if this gets tight. (Invariant/handler test files do not affect this — they're not part of the deployed contract.)
+- **Contract size**: `Web3Campaigns` runtime is 23.5KB against the 24.576KB EIP-170 limit — ~1.0KB headroom (per-campaign pinning added ~1.8KB; getting tight — the still-open protocol-fee item will likely require splitting logic into the diamond rather than adding to the entrypoint). Check `forge build --sizes` before adding more logic to the entrypoint contract; consider splitting a new logic contract into the diamond if this gets tight. (Invariant/handler test files do not affect this — they're not part of the deployed contract.)
 - A handler bug encountered during development, worth remembering for future ERC1155 test/handler contracts: OZ's `_mint` invokes the ERC1155 receiver hook, so any contract that receives freshly-minted ERC1155 tokens (e.g. a fuzz handler) must inherit `ERC1155Holder` or implement `onERC1155Received` — otherwise the mint reverts silently under `fail_on_revert=false`, which can make an invariant vacuously true. Always sanity-check a new handler's call-summary table for suspicious 100%-revert rows.
 - Using `vm.expectRevert` **inside** a stateful-fuzz handler under `fail_on_revert=false` is fragile: if the wrapped call unexpectedly succeeds (a real bug), `vm.expectRevert`'s own mismatch failure reverts the whole handler call — undoing the buggy state change too — and the fuzzer silently discards it as "just another revert," masking the bug. Prefer `try/catch` with a loud `revert("...")` on the unexpected-success branch instead (see `AttestationVersionHandler.sol`).
 

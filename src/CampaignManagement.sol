@@ -187,11 +187,14 @@ contract CampaignManagement is CampaignStorage {
     // ============================================
 
     /**
-     * @notice Configure the ERC20 reward token for a campaign (Merkle settlement model).
-     * @dev Distribution amounts (fixed / tiered / FCFS / sybil-filtered) are computed
-     *      OFF-CHAIN after the campaign ends and committed as a Merkle root via
-     *      setERC20MerkleRoot. This setter only records WHICH token will be paid; the
-     *      host must escrow it with fundCampaignERC20 before opening the campaign.
+     * @notice Configure the ERC20 reward token for a campaign.
+     * @dev This setter only records WHICH token will be paid; the host must escrow it with
+     *      fundCampaignERC20 before opening the campaign. It deliberately does NOT commit the
+     *      campaign to a settlement mode -- token configuration is common to ALL three ERC20
+     *      settlement paths (MERKLE, RANK_TIERED, SCORE_TIERED), so committing MERKLE here would
+     *      wrongly foreclose the on-chain-tiered paths. The mode is committed later by the action
+     *      specific to each path: setERC20MerkleRoot for MERKLE, or the module's
+     *      setRankTiers/setScoreTiers (via the setSettlementMode callback) for the tiered paths.
      * @param _campaignId Campaign ID
      * @param _tokenAddress ERC20 token contract address
      */
@@ -208,6 +211,19 @@ contract CampaignManagement is CampaignStorage {
         _erc20RewardToken[_campaignId] = _tokenAddress;
 
         emit ERC20RewardConfigured(_campaignId, _tokenAddress);
+    }
+
+    /// @dev Commits a campaign to an ERC20 settlement mode (MERKLE / RANK_TIERED / SCORE_TIERED).
+    /// A campaign may only ever commit to one mode: the first configuration call after
+    /// creation sets it from UNSET, and re-configuring the SAME mode while still Draft is allowed
+    /// (e.g. re-publishing tiers), but switching to a DIFFERENT mode once one has been chosen is
+    /// rejected -- this is what makes the three settlement paths mutually exclusive per campaign.
+    function _lockSettlementMode(uint256 _campaignId, ERC20SettlementMode _mode) internal {
+        ERC20SettlementMode current = _erc20SettlementMode[_campaignId];
+        if (current != ERC20SettlementMode.UNSET && current != _mode) {
+            revert Web3Campaigns__SettlementModeAlreadySet();
+        }
+        _erc20SettlementMode[_campaignId] = _mode;
     }
 
     /**
@@ -259,6 +275,11 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.status != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignNotYetEnded();
         }
+        // Publishing a Merkle root is the MERKLE-path-specific action, so it is what commits the
+        // campaign to MERKLE settlement (from UNSET) -- or, if the campaign already committed to a
+        // tiered mode via the module, reverts SettlementModeAlreadySet, keeping the Merkle and
+        // on-chain-tiered paths mutually exclusive on any single campaign.
+        _lockSettlementMode(_campaignId, ERC20SettlementMode.MERKLE);
         if (_erc20RewardToken[_campaignId] == address(0)) {
             revert Web3Campaigns__ERC20RewardNotConfigured();
         }
@@ -268,6 +289,35 @@ contract CampaignManagement is CampaignStorage {
 
         _erc20MerkleRoot[_campaignId] = _merkleRoot;
         emit ERC20MerkleRootSet(_campaignId, _merkleRoot);
+    }
+
+    /**
+     * @notice Trusted callback: the registered OnChainRewardModule reports that a campaign has
+     *         committed to a settlement mode (RANK_TIERED or SCORE_TIERED), so Web3Campaigns can
+     *         cheaply gate claimERC20's Merkle-path check locally without a cross-contract call.
+     * @dev Restricted to msg.sender == the registered module. Reuses the same mutual-exclusion guard
+     *      (_lockSettlementMode) as setERC20MerkleRoot's MERKLE commitment, so a campaign already
+     *      committed to one mode can never be silently switched to another from either side.
+     * @param _campaignId Campaign ID
+     * @param _mode The mode the module has committed this campaign to
+     */
+    function setSettlementMode(uint256 _campaignId, ERC20SettlementMode _mode) external {
+        if (msg.sender != _onChainRewardModule) {
+            revert Web3Campaigns__NotOnChainRewardModule();
+        }
+        _lockSettlementMode(_campaignId, _mode);
+
+        // Pin the authoritative module for this campaign the first time it adopts an on-chain
+        // (tiered) settlement mode. Pinning is idempotent: the same-mode re-config that legitimately
+        // re-invokes this callback (e.g. a host re-publishing tiers while Draft) leaves an existing
+        // pin untouched and does not re-emit. Because the pin is captured once, a later rotation of
+        // the global _onChainRewardModule cannot retroactively reassign an already-adopted campaign.
+        if (_mode == ERC20SettlementMode.RANK_TIERED || _mode == ERC20SettlementMode.SCORE_TIERED) {
+            if (_campaignRewardModule[_campaignId] == address(0)) {
+                _campaignRewardModule[_campaignId] = _onChainRewardModule;
+                emit RewardModulePinned(_campaignId, _onChainRewardModule);
+            }
+        }
     }
 
     /**

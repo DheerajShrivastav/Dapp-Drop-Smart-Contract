@@ -160,6 +160,19 @@ contract CampaignViewFunctions is CampaignStorage {
     }
 
     /**
+     * @notice The OnChainRewardModule instance pinned as authoritative for a campaign.
+     * @dev address(0) until the campaign first adopts an on-chain (RANK_TIERED / SCORE_TIERED)
+     *      settlement mode, at which point it is pinned to the then-current module and never
+     *      reassigned. The pinned module reads this to verify it is still the campaign's
+     *      authoritative module before paying out.
+     * @param _campaignId Campaign ID
+     * @return The pinned module address, or address(0) if the campaign has no pinned module
+     */
+    function getCampaignRewardModule(uint256 _campaignId) external view returns (address) {
+        return _campaignRewardModule[_campaignId];
+    }
+
+    /**
      * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
      */
     function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {
@@ -187,6 +200,36 @@ contract CampaignViewFunctions is CampaignStorage {
      */
     function getERC1155Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (uint256) {
         return _escrowedERC1155[_campaignId][_token][_tokenId];
+    }
+
+    // ============================================
+    // ON-CHAIN REWARD MODULE SUPPORT
+    // ============================================
+    // Rank/score/tier state for RANK_TIERED and SCORE_TIERED campaigns lives in the separately
+    // deployed OnChainRewardModule (its own EIP-170 budget), not here -- query the module directly
+    // for that data. This view exists purely so the module can cheaply verify "is caller the
+    // campaign host" and "is the campaign in the right status" without paying for the full
+    // getCampaign() struct return (which includes the CampaignTask[] array).
+
+    /// @notice A campaign's host and current status, for the OnChainRewardModule's own
+    /// authorization/status checks.
+    function getCampaignHostAndStatus(uint256 _campaignId) external view returns (address host, CampaignStatus status) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        host = campaign.host;
+        status = campaign.status;
+    }
+
+    /// @notice A campaign's task count, for the OnChainRewardModule's setTaskPoints index
+    /// validation (cheaper than returning the full CampaignTask[] array via getCampaign).
+    function getCampaignTaskCount(uint256 _campaignId) external view returns (uint256) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        return campaign.tasks.length;
     }
 }
 

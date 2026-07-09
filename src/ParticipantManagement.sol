@@ -8,6 +8,7 @@ import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IOnChainRewardModule} from "./IOnChainRewardModule.sol";
 
 // This contract manages participant actions like completing tasks and claiming rewards.
 contract ParticipantManagement is CampaignStorage {
@@ -102,6 +103,7 @@ contract ParticipantManagement is CampaignStorage {
 
         // Mark task as completed for the participant
         _participantTaskCompletion[msg.sender][_campaignId][_taskIndex] = true;
+        _notifyModuleOfCompletion(_campaignId, msg.sender, _taskIndex, true, false);
 
         // Accurately track unique participants
         if (!_hasParticipated[msg.sender][_campaignId]) {
@@ -143,6 +145,17 @@ contract ParticipantManagement is CampaignStorage {
         uint256 _deadline,
         bytes calldata _signature
     ) public virtual {
+        _verifySingleTaskCompletion(_campaignId, _participant, _taskIndex, _completed, _deadline, _signature);
+    }
+
+    function _verifySingleTaskCompletion(
+        uint256 _campaignId,
+        address _participant,
+        uint256 _taskIndex,
+        bool _completed,
+        uint256 _deadline,
+        bytes calldata _signature
+    ) internal {
         if (_participant == address(0)) {
             revert Web3Campaigns__ZeroAddress();
         }
@@ -185,6 +198,7 @@ contract ParticipantManagement is CampaignStorage {
 
         bool wasCompleted = _participantTaskCompletion[_participant][_campaignId][_taskIndex];
         _participantTaskCompletion[_participant][_campaignId][_taskIndex] = _completed;
+        _notifyModuleOfCompletion(_campaignId, _participant, _taskIndex, _completed, wasCompleted);
 
         // totalParticipants tracks lifetime participation, not current completion status, so it
         // is only ever incremented on a participant's first-ever completed attestation/task.
@@ -230,12 +244,67 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         for (uint256 i; i < length; ++i) {
-            verifyTaskCompletionWithSignature(
+            _verifySingleTaskCompletion(
                 _campaignId, _participants[i], _taskIndices[i], _completedFlags[i], _deadlines[i], _signatures[i]
             );
         }
 
         emit BatchTasksVerified(_campaignId, length);
+    }
+
+    /// @dev Returns true if `_participant` has completed every non-optional task in the campaign.
+    /// Used both to decide whether to assign a completion rank (in the OnChainRewardModule), and to
+    /// re-verify current completion status at RANK_TIERED claim time (also in the module, via the
+    /// hasAllRequired flag passed through notifyTaskCompletion / recomputed at claim time there).
+    function _hasCompletedAllRequiredTasks(uint256 _campaignId, address _participant) internal view returns (bool) {
+        Campaign storage campaign = _campaigns[_campaignId];
+        uint256 len = campaign.tasks.length;
+        for (uint256 i; i < len; ++i) {
+            if (!campaign.tasks[i].isOptional && !_participantTaskCompletion[_participant][_campaignId][i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// @dev Notifies the registered OnChainRewardModule of a task-completion state transition, for
+    /// campaigns that have committed to RANK_TIERED or SCORE_TIERED settlement -- all score/rank
+    /// bookkeeping lives in that separately-deployed contract (its own EIP-170 budget; this feature
+    /// didn't fit in Web3Campaigns' own bytecode alongside everything else). Called from both
+    /// completeTask's self-assertion and verifyTaskCompletionWithSignature's signed path so the
+    /// module sees a uniform stream of transitions regardless of how a task was completed.
+    ///
+    /// Cheap no-op for the common case: skips entirely if nothing actually changed, if the campaign
+    /// isn't using an on-chain-tiered mode (a plain local storage read, no cross-contract call), or
+    /// if no module is registered -- so campaigns not using this feature pay zero extra gas here.
+    function _notifyModuleOfCompletion(
+        uint256 _campaignId,
+        address _participant,
+        uint256 _taskIndex,
+        bool _nowCompleted,
+        bool _wasCompleted
+    ) internal {
+        if (_nowCompleted == _wasCompleted) {
+            return;
+        }
+        ERC20SettlementMode mode = _erc20SettlementMode[_campaignId];
+        if (mode != ERC20SettlementMode.RANK_TIERED && mode != ERC20SettlementMode.SCORE_TIERED) {
+            return;
+        }
+        // Route to the campaign's PINNED module, not the rotatable global _onChainRewardModule.
+        // A tiered campaign is always pinned at adoption (setSettlementMode), so this is non-zero
+        // here; using it keeps completion/revocation bookkeeping consistent with the pin that
+        // payOnChainReward and claimReward authorize against, so an admin rotation of the global
+        // default cannot divert an in-flight campaign's rank/score state to a non-authoritative
+        // module. The zero-check remains a defensive guard.
+        address module = _campaignRewardModule[_campaignId];
+        if (module == address(0)) {
+            return;
+        }
+
+        bool hasAllRequired = _hasCompletedAllRequiredTasks(_campaignId, _participant);
+        IOnChainRewardModule(module)
+            .notifyTaskCompletion(_campaignId, _participant, _taskIndex, _nowCompleted, hasAllRequired);
     }
 
     /**
@@ -262,6 +331,15 @@ contract ParticipantManagement is CampaignStorage {
         // paid out of OTHER campaigns' escrow, leaving them underwater.
         if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
             revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        // Reject only the on-chain-tiered modes here (those settle via the module's claimReward, not
+        // this Merkle path). UNSET is allowed to fall through: a campaign that configured a token but
+        // has not yet published a Merkle root has UNSET mode, and since a root can only be set by
+        // setERC20MerkleRoot -- which commits MERKLE -- an UNSET campaign always has a zero root and
+        // so reverts MerkleRootNotSet just below, exactly as before this path was decoupled.
+        ERC20SettlementMode mode = _erc20SettlementMode[_campaignId];
+        if (mode == ERC20SettlementMode.RANK_TIERED || mode == ERC20SettlementMode.SCORE_TIERED) {
+            revert Web3Campaigns__WrongSettlementMode();
         }
         if (_erc20Swept[_campaignId]) {
             revert Web3Campaigns__AlreadySwept();
@@ -292,6 +370,63 @@ contract ParticipantManagement is CampaignStorage {
         IERC20(_erc20RewardToken[_campaignId]).safeTransfer(msg.sender, _amount);
 
         emit ERC20RewardClaimed(_campaignId, msg.sender, _amount);
+    }
+
+    /**
+     * @notice Trusted callback: the registered OnChainRewardModule has determined `_participant` is
+     *         owed `_amount` for a RANK_TIERED or SCORE_TIERED campaign (rank/score computation,
+     *         tier matching, and claimed-tracking all happen in the module -- Web3Campaigns only
+     *         moves the funds it custodies).
+     * @dev Restricted to msg.sender == the registered module. Reuses claimERC20's exact escrow
+     *      accounting, including the _erc20Swept guard -- without it, this payout path would reopen
+     *      the same cross-campaign ERC20 drain the escrow-solvency invariant caught earlier (a swept
+     *      campaign's escrow has already been returned to the host, so a late payout would draw down
+     *      other campaigns' commingled balance).
+     * @param _campaignId Campaign ID
+     * @param _participant Recipient, as determined by the module
+     * @param _amount Amount to pay, as determined by the module
+     * @param _rankOrScore The rank or score the module matched `_amount` against, forwarded purely
+     *        for an accurate ERC20RewardClaimedOnChain event (Web3Campaigns has no rank/score state
+     *        of its own to derive this from).
+     */
+    function payOnChainReward(uint256 _campaignId, address _participant, uint256 _amount, uint256 _rankOrScore)
+        public
+        virtual
+    {
+        // Per-campaign authorization is the SOLE gate here: only the module pinned to THIS campaign
+        // may pay out for it. This deliberately does not also require msg.sender to be the current
+        // global _onChainRewardModule -- that would strand an in-flight pinned campaign the moment
+        // the global default is rotated, defeating the purpose of the pin. The pin is only ever set
+        // to a legitimately admin-registered module, so passing this check already proves the caller
+        // is authorized; a global halt, if needed, is available via the wrapper's whenNotPaused.
+        if (msg.sender != _campaignRewardModule[_campaignId]) {
+            revert Web3Campaigns__RewardModuleMismatch(_campaignId, _campaignRewardModule[_campaignId], msg.sender);
+        }
+
+        Campaign storage campaign = _campaigns[_campaignId];
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+        if (_erc20Swept[_campaignId]) {
+            revert Web3Campaigns__AlreadySwept();
+        }
+        if (_erc20SettlementClaimed[_campaignId][_participant]) {
+            revert Web3Campaigns__AlreadyClaimedSettlement();
+        }
+
+        _erc20SettlementClaimed[_campaignId][_participant] = true;
+        uint256 newDistributed = _erc20Distributed[_campaignId] + _amount;
+        if (newDistributed > _erc20Escrowed[_campaignId]) {
+            revert Web3Campaigns__InsufficientEscrow();
+        }
+        _erc20Distributed[_campaignId] = newDistributed;
+
+        IERC20(_erc20RewardToken[_campaignId]).safeTransfer(_participant, _amount);
+
+        emit ERC20RewardClaimedOnChain(_campaignId, _participant, _amount, _rankOrScore);
     }
 
     /**
