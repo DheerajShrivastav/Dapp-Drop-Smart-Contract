@@ -41,9 +41,9 @@ Draft → Open → Ended → Closed
 
 ## Reward / claim flow (v0.3 — escrow + Merkle settlement)
 
-ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (escrow into contract) → run campaign → `endCampaign` → `setERC20MerkleRoot` (off-chain allocations) → participants `claimERC20(amount, proof)` from escrow (reverts `AlreadySwept` after host sweep — required because ERC20 escrow is a commingled pool, see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3) → after `Closed` + 30-day grace, host `withdrawUnclaimedERC20`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
+ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (escrow into contract) → run campaign → `endCampaign` → `setERC20MerkleRoot` (off-chain allocations; starts a `ROOT_DISPUTE_WINDOW`, currently 24h) → participants `claimERC20(amount, proof)` from escrow once the window elapses (reverts `RootDisputeWindowActive` before then, `AlreadySwept` after host sweep — required because ERC20 escrow is a commingled pool, see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3) → after `Closed` + 30-day grace, host `withdrawUnclaimedERC20`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
 
-NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` → participants `claimNFT(standard, token, tokenId, amount, proof)` → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
+NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` (also starts the dispute window) → participants `claimNFT(standard, token, tokenId, amount, proof)` once it elapses → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
 
 ## On-chain tiered settlement + per-campaign module pinning
 
