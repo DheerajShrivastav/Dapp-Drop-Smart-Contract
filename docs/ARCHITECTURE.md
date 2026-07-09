@@ -53,6 +53,18 @@ An alternative to Merkle settlement: `RANK_TIERED` / `SCORE_TIERED` ERC20 reward
 - **Pinning happens once**, in `setSettlementMode`: the first `RANK_TIERED`/`SCORE_TIERED` commit records `_campaignRewardModule[id] = _onChainRewardModule` and emits `RewardModulePinned`. Same-mode re-configs (e.g. re-publishing tiers while Draft) are idempotent — no re-pin, no re-emit.
 - **`payOnChainReward` authorizes solely against the per-campaign pin** (`msg.sender == _campaignRewardModule[id]`, else `RewardModuleMismatch`), *not* the global default. So a module rotated out of the global slot stays authoritative for every campaign it was already pinned to, and a newly-registered module cannot settle campaigns adopted under an older one.
 
+## Protocol fee module (satellite, no pinning needed)
+
+A second satellite contract, `FeeModule`, mirrors the `OnChainRewardModule` split: `Web3Campaigns` retains all fund custody, `FeeModule` only computes a fee via `IFeeModule.computeFee(campaignId, amount) view returns (uint256 feeAmount, address treasury)`. Referenced through the admin-rotatable `_feeModule` (`setFeeModule`/`getFeeModule`; `address(0)` disables fees entirely — the default, and byte-for-byte unchanged behavior for every campaign that predates this feature).
+
+`fundCampaignERC20` calls `computeFee` (a `view` call, so Solidity emits a `STATICCALL` — a malicious module cannot reenter with a state-changing call from inside it), skims `feeAmount` to `treasury`, and escrows the remainder. The host still pays the full gross amount from their wallet; `CampaignFundedERC20` reports the **net escrowed** amount, `ProtocolFeeCollected` reports the fee separately.
+
+**Deliberately NOT pinned per campaign**, unlike the reward module — and this is a real architectural distinction worth understanding, not an oversight:
+- The reward module holds **persistent per-campaign state** (rank/score) that accumulates across many calls over a campaign's lifetime; a rotation mid-campaign could orphan that state on the old module while claims moved to a new one, which is exactly the desync `_campaignRewardModule` pinning prevents.
+- Fee computation has **no persistent per-campaign state at all**: `computeFee` is a pure function of `(amount, the module's current global config)`, evaluated and fully settled — fee transferred, escrow credited — within the single `fundCampaignERC20` call that invoked it. There is nothing left over that a later rotation could orphan or desync. A rotation only changes the rate/treasury used by funding calls made **after** it, which is the intended effect, not a hazard.
+
+The reference `FeeModule` implementation is a flat global basis-point rate (capped at `MAX_FEE_BPS`, sanity bound not policy) with a single rotatable `admin` — deliberately minimal (no OZ `AccessControl` import) to keep this satellite's own EIP-170 footprint small, matching `OnChainRewardModule`'s lightweight-satellite style. `IFeeModule.computeFee`'s `campaignId` parameter is currently unused by this implementation but is kept in the interface so a future per-campaign fee tier can be added without changing the `fundCampaignERC20` call site.
+
 ## Task verification (Phase 2 — signed attestations)
 
 Off-chain tasks (social follows, Discord joins, `ONCHAIN_TX`) are verified via EIP-712 signed attestations from a `SIGNER_ROLE` key, not host transactions — `verifyTaskCompletionWithSignature`/`batchVerifyTaskCompletionWithSignatures` replaced the old `verifyTaskCompletion`/`batchVerifyTaskCompletion`. `ONCHAIN_HOLD_ERC20/ERC721` remain self-verified on-chain in `completeTask` and are not signature-overridable. Full detail: [TASK_VERIFICATION.md](TASK_VERIFICATION.md).
