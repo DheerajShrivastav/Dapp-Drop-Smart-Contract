@@ -188,6 +188,15 @@ contract CampaignViewFunctions is CampaignStorage {
     }
 
     /**
+     * @notice The currently-registered protocol-fee module (address(0) if fees are disabled).
+     * @dev Global, not per-campaign -- unlike the reward module, fee computation has no persistent
+     *      per-campaign state, so there is nothing to pin. See IFeeModule.sol.
+     */
+    function getFeeModule() external view returns (address) {
+        return _feeModule;
+    }
+
+    /**
      * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
      */
     function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {

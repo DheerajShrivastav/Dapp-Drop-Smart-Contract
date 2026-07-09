@@ -51,6 +51,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__NothingToSweep();
     error Web3Campaigns__InvalidAmount();
     error Web3Campaigns__NFTNotEscrowed();
+    error Web3Campaigns__FeeExceedsAmount();
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();
@@ -246,6 +247,12 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // later rotation of the global module cannot retroactively change who governs an existing campaign.
     mapping(uint256 => address) internal _campaignRewardModule; // campaignId => pinned module (0 = unpinned)
 
+    // Trusted contract allowed to compute the protocol fee skimmed at fundCampaignERC20 (0 = no fee,
+    // the default). Admin-rotatable, same pattern as _onChainRewardModule -- but unlike that module,
+    // NO per-campaign pinning is needed here, since fee computation has no persistent per-campaign
+    // state to desync across a rotation (see IFeeModule.sol for the full rationale).
+    address internal _feeModule;
+
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
         uint256 indexed campaignId, address indexed host, string name, uint256 startTime, uint256 endTime
@@ -308,6 +315,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event OnChainRewardModuleUpdated(address indexed module);
     // Emitted the first time a campaign is bound to a specific OnChainRewardModule instance.
     event RewardModulePinned(uint256 indexed campaignId, address indexed module);
+
+    // Protocol Fee Events
+    event FeeModuleUpdated(address indexed module);
+    event ProtocolFeeCollected(uint256 indexed campaignId, address indexed treasury, uint256 feeAmount);
 
     // --- Modifiers ---
     modifier onlyHost(uint256 _campaignId) virtual {
