@@ -91,7 +91,11 @@ contract OnChainRewardInvariant is StdInvariant, Test {
         uint256 n = checkOpen ? handler.openCount() : handler.endedCount();
         for (uint256 i; i < n; ++i) {
             uint256 id = checkOpen ? handler.openAt(i) : handler.endedAt(i);
-            OnChainRewardModule pinned = OnChainRewardModule(handler.pinnedModuleOf(id));
+            // Query the LIVE pin (not the handler's own recorded copy) so this check stays valid
+            // independently of invariant_pinnedModuleNeverChanges -- otherwise a pin-rotation bug
+            // could make this silently observe the wrong module's (empty) rank state instead of
+            // catching anything.
+            OnChainRewardModule pinned = OnChainRewardModule(campaigns.getCampaignRewardModule(id));
 
             uint256[4] memory ranks;
             for (uint256 idx; idx < 4; ++idx) {
