@@ -43,20 +43,26 @@ Flow: `configureERC20Reward` (token only, no mode lock) → host calls `module.s
 - **Authorization**: `payOnChainReward` accepts only the per-campaign pinned module (`RewardModuleMismatch` otherwise), independent of the rotatable global default — see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **Mutual exclusivity**: a campaign commits to exactly one of MERKLE / RANK_TIERED / SCORE_TIERED; the first commit wins and any cross-mode second commit reverts `SettlementModeAlreadySet`.
 
-## NFT — multi-standard (ERC721 + ERC1155), Merkle settlement (Stage B2)
+## NFT — multi-standard (ERC721 + ERC1155), Merkle settlement (Stage B2), split into `NFTSettlementModule` (satellite)
 
-State (CampaignStorage.sol): `_nftMerkleRoot`, `_nftLeafClaimed`, and the per-campaign escrow ownership maps `_escrowedERC721` (id→token→tokenId→held) / `_escrowedERC1155` (id→token→tokenId→amount). Web3Campaigns inherits OZ `ERC721Holder` + `ERC1155Holder` for safe custody.
+All NFT settlement logic (Merkle roots, leaf-claimed tracking, per-campaign escrow bookkeeping) lives in the separately-deployed `NFTSettlementModule` (its own EIP-170 budget), not on `Web3Campaigns` — extracted to reclaim `Web3Campaigns`' bytecode headroom, mirroring the `OnChainRewardModule`/`FeeModule` satellite pattern (see [ARCHITECTURE.md](ARCHITECTURE.md)). `Web3Campaigns` keeps **all** NFT custody (it alone implements OZ `ERC721Holder`/`ERC1155Holder`) and all deposit bookkeeping; the module only decides who gets paid what and calls back into the trusted `executeNFTTransferOut` to move a token.
 
-Host flow (CampaignManagement.sol):
-1. `depositERC721Rewards(id, token, tokenIds[])` / `depositERC1155Rewards(id, token, ids[], amounts[])` — escrow NFTs per campaign (Draft/Open/Ended), max 100/call. The ownership maps prevent one campaign's settlement from spending another's escrow.
-2. `setNFTMerkleRoot(id, root)` — Ended only; commits off-chain allocations. Updatable while Ended.
-3. `withdrawUnclaimedERC721(id, token, tokenIds[])` / `withdrawUnclaimedERC1155(id, token, ids[], amounts[])` — reclaim still-escrowed NFTs after Closed + grace.
+State: `_nftMerkleRoot`, `_nftRootSetAt`, `_nftLeafClaimed`, and the per-campaign escrow ownership maps `_escrowedERC721` (id→token→tokenId→held) / `_escrowedERC1155` (id→token→tokenId→amount) all live on `NFTSettlementModule`. `Web3Campaigns`/`CampaignStorage` keeps only `_nftModule` (global default, admin-rotatable via `setNFTSettlementModule`) and `_campaignNFTModule` (per-campaign pin, see below).
 
-Participant claim (ParticipantManagement.sol):
-- `claimNFT(id, standard, token, tokenId, amount, proof)` — status Ended/Closed; leaf `keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount))))`; **reverts `RootDisputeWindowActive` until `ROOT_DISPUTE_WINDOW` (24h) has elapsed since the root was last (re-)published** (same mitigation as the ERC20 path — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #14); per-leaf claim guard (`_nftLeafClaimed`); decrements per-campaign escrow (reverts `NFTNotEscrowed` if not held); ERC721 via `safeTransferFrom`, ERC1155 via `safeTransferFrom(...,amount,"")`. `nonReentrant + whenNotPaused`.
+Host flow:
+1. `depositERC721Rewards(id, token, tokenIds[])` / `depositERC1155Rewards(id, token, ids[], amounts[])` (still on `Web3Campaigns`, `CampaignManagement.sol`) — escrow NFTs per campaign (Draft/Open/Ended), max 100/call; pins the campaign's `NFTSettlementModule` on first call (see "Per-campaign pinning" below), then forwards the deposit bookkeeping to the pinned module via `INFTSettlementModule.recordERC721Deposit`/`recordERC1155Deposit` before pulling custody. The ownership maps prevent one campaign's settlement from spending another's escrow.
+2. `NFTSettlementModule.setNFTMerkleRoot(id, root)` — called directly on the module (not `Web3Campaigns`); Ended only; commits off-chain allocations. Updatable while Ended. Reverts `NotAuthoritativeModule` if the campaign never received a deposit (never pinned).
+3. `NFTSettlementModule.withdrawUnclaimedERC721(id, token, tokenIds[])` / `withdrawUnclaimedERC1155(id, token, ids[], amounts[])` — reclaim still-escrowed NFTs after Closed + grace (or immediately once `Cancelled`).
+
+Participant claim (called on the module, not `Web3Campaigns`):
+- `NFTSettlementModule.claimNFT(id, standard, token, tokenId, amount, proof)` — status Ended/Closed; leaf `keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount))))`; **reverts `RootDisputeWindowActive` until `ROOT_DISPUTE_WINDOW` (24h) has elapsed since the root was last (re-)published** (same mitigation as the ERC20 path — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #14); per-leaf claim guard (`_nftLeafClaimed`); decrements per-campaign escrow (reverts `NFTNotEscrowed` if not held); calls back into `Web3Campaigns.executeNFTTransferOut` to move the token (ERC721 via `safeTransferFrom`, ERC1155 via `safeTransferFrom(...,amount,"")`). `Web3Campaigns.executeNFTTransferOut` is `nonReentrant + whenNotPaused` and authorizes solely against the campaign's pinned module (`NFTModuleMismatch` otherwise).
 - Off-chain tooling builds the tree with leaf encoding `["address","uint8","address","uint256","uint256"]`.
 
-Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`, `getNFTClaimableAt(id)` → timestamp claims open (0 if no root yet).
+Views (on the module): `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Escrowed`, `getNFTClaimableAt(id)` → timestamp claims open (0 if no root yet). `Web3Campaigns.getCampaignNFTModule(id)` returns the pinned module address (or `address(0)` if never pinned).
+
+### Per-campaign pinning (at first deposit, not at root-set)
+
+`_nftModule` is the global default; a campaign pins to whichever instance is current **the first time it receives an NFT deposit** (`CampaignManagement._pinNFTModule`, idempotent, emits `NFTModulePinned`) — deliberately earlier than the reward module's pin-at-mode-adoption trigger, because escrow bookkeeping starts accumulating at deposit time, which can precede any root ever being published. `Web3Campaigns.executeNFTTransferOut` authorizes solely against this per-campaign pin, so a later admin rotation of `_nftModule` can never desync a campaign's already-recorded escrow bookkeeping — the same protection `_campaignRewardModule` gives the on-chain tiered reward path. Every module entrypoint independently re-verifies `getCampaignNFTModule(id) == address(this)` before acting on its own state (defense-in-depth self-check, same pattern as `OnChainRewardModule.claimReward`).
 
 ## Allocation-fairness dispute window (applies to both ERC20 and NFT roots)
 
@@ -67,7 +73,7 @@ Views: `getNFTMerkleRoot`, `isNFTLeafClaimed`, `isERC721Escrowed`, `getERC1155Es
 `cancelCampaign(id)` (CampaignManagement.sol) — host-only, requires status Draft or Open **and** `campaign.totalParticipants == 0`; transitions to the terminal `Cancelled` status. Deliberately restrictive: once one participant has genuinely engaged, cancellation is permanently blocked (`CampaignHasParticipants`), closing a bait-and-switch path where a host could let participants do free work and cancel right before `Ended` to dodge paying out.
 
 - **ERC20**: refunded immediately in the same call via the internal `_refundERC20IfAny` — no grace period, since no Merkle root could ever have been published pre-Ended (claims require `Ended`/`Closed`), so no claim was ever possible. Silently no-ops if no ERC20 reward was configured/escrowed (unlike the explicit `withdrawUnclaimedERC20`, which reverts on nothing-to-sweep).
-- **NFT**: not auto-refunded (no on-chain enumerable per-campaign inventory list to iterate) — instead, `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` become **immediately callable** (no grace wait) once status is `Cancelled` (see `_requireSweepable`'s early-return for that status). Host calls them with the specific tokenIds/ids they know they deposited.
+- **NFT**: not auto-refunded (no on-chain enumerable per-campaign inventory list to iterate) — instead, `NFTSettlementModule.withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` become **immediately callable** (no grace wait) once status is `Cancelled` (see the module's `_requireSweepable`'s early-return for that status). Host calls them with the specific tokenIds/ids they know they deposited.
 - Emits `CampaignCancelled(id, host, refundedERC20)` plus the usual `CampaignStatusUpdated`.
 
 ## Off-chain reward
