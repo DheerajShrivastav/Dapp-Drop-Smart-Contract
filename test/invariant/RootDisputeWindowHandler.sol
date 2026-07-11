@@ -4,6 +4,7 @@ pragma solidity ^0.8.31;
 import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../../src/Web3Campaigns.sol";
 import {CampaignStorage} from "../../src/CampaignStorage.sol";
+import {NFTSettlementModule} from "../../src/NFTSettlementModule.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {MockERC721} from "../NFTSettlement.t.sol";
 
@@ -28,6 +29,7 @@ import {MockERC721} from "../NFTSettlement.t.sol";
 /// pattern, from AttestationVersionHandler).
 contract RootDisputeWindowHandler is Test {
     Web3Campaigns public campaigns;
+    NFTSettlementModule public nftModule;
     ERC20Mock public token;
     MockERC721 public nft721;
 
@@ -53,8 +55,9 @@ contract RootDisputeWindowHandler is Test {
     uint256 public ghost_nftSuccessCount;
     uint256 public ghost_nftRevertCount;
 
-    constructor(Web3Campaigns _campaigns, ERC20Mock _token, MockERC721 _nft721) {
+    constructor(Web3Campaigns _campaigns, NFTSettlementModule _nftModule, ERC20Mock _token, MockERC721 _nft721) {
         campaigns = _campaigns;
+        nftModule = _nftModule;
         token = _token;
         nft721 = _nft721;
     }
@@ -189,7 +192,7 @@ contract RootDisputeWindowHandler is Test {
         if (nftClaimed[id]) return;
 
         bytes32 root = _nftLeaf(nftTokenIdOf[id]);
-        campaigns.setNFTMerkleRoot(id, root);
+        nftModule.setNFTMerkleRoot(id, root);
 
         if (root != nftLastRoot[id]) {
             nftExpectedClaimableAt[id] = block.timestamp + campaigns.ROOT_DISPUTE_WINDOW();
@@ -208,7 +211,7 @@ contract RootDisputeWindowHandler is Test {
 
         if (shouldSucceed) {
             vm.prank(participant);
-            try campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof) {
+            try nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof) {
                 nftClaimed[id] = true;
                 ghost_nftSuccessCount++;
             } catch {
@@ -216,7 +219,7 @@ contract RootDisputeWindowHandler is Test {
             }
         } else {
             vm.prank(participant);
-            try campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof) {
+            try nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof) {
                 revert("attemptNFTClaim: expected RootDisputeWindowActive but succeeded before claimableAt");
             } catch (bytes memory reason) {
                 if (bytes4(reason) != CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector) {

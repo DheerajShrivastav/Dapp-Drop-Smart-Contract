@@ -4,16 +4,18 @@ pragma solidity ^0.8.31;
 import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
 import {CampaignStorage} from "../src/CampaignStorage.sol";
+import {NFTSettlementModule} from "../src/NFTSettlementModule.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
 /// @notice Covers cancelCampaign: allowed only in Draft/Open while totalParticipants == 0 (closing
-/// off a bait-and-switch griefing path), immediate ERC20 refund, and immediate NFT reclaim via the
-/// existing withdrawUnclaimedERC721/1155 (bypassing the grace period once Cancelled).
+/// off a bait-and-switch griefing path), immediate ERC20 refund, and immediate NFT reclaim via
+/// NFTSettlementModule.withdrawUnclaimedERC721/1155 (bypassing the grace period once Cancelled).
 contract CancelCampaignTest is Test {
     Web3Campaigns public campaigns;
     ERC20Mock public token;
+    NFTSettlementModule public nftModule;
 
     address public deployer;
     address public host1;
@@ -37,6 +39,10 @@ contract CancelCampaignTest is Test {
 
         vm.prank(deployer);
         campaigns.grantHostRole(host1);
+
+        nftModule = new NFTSettlementModule(address(campaigns));
+        vm.prank(deployer);
+        campaigns.setNFTSettlementModule(address(nftModule));
     }
 
     function _createCampaign() internal returns (uint256 id, uint256 startTime, uint256 endTime) {
@@ -197,7 +203,7 @@ contract CancelCampaignTest is Test {
 
         // No grace-period wait required -- immediately reclaimable once Cancelled.
         vm.prank(host1);
-        campaigns.withdrawUnclaimedERC721(id, address(nft), ids);
+        nftModule.withdrawUnclaimedERC721(id, address(nft), ids);
 
         assertEq(nft.ownerOf(1), host1);
     }

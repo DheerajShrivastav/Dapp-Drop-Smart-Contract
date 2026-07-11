@@ -4,6 +4,7 @@ pragma solidity ^0.8.31;
 import {Test} from "forge-std/Test.sol";
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Web3Campaigns} from "../../src/Web3Campaigns.sol";
+import {NFTSettlementModule} from "../../src/NFTSettlementModule.sol";
 import {MockERC721, MockERC1155} from "../NFTSettlement.t.sol";
 import {NFTInventoryHandler} from "./NFTInventoryHandler.sol";
 
@@ -14,6 +15,7 @@ import {NFTInventoryHandler} from "./NFTInventoryHandler.sol";
 /// inventory map design does NOT have the same gap.
 contract NFTInventoryInvariant is StdInvariant, Test {
     Web3Campaigns public campaigns;
+    NFTSettlementModule public nftModule;
     MockERC721 public nft721;
     MockERC1155 public nft1155;
     NFTInventoryHandler public handler;
@@ -25,9 +27,13 @@ contract NFTInventoryInvariant is StdInvariant, Test {
         vm.prank(deployer);
         campaigns = new Web3Campaigns();
 
+        nftModule = new NFTSettlementModule(address(campaigns));
+        vm.prank(deployer);
+        campaigns.setNFTSettlementModule(address(nftModule));
+
         nft721 = new MockERC721();
         nft1155 = new MockERC1155();
-        handler = new NFTInventoryHandler(campaigns, nft721, nft1155);
+        handler = new NFTInventoryHandler(campaigns, nftModule, nft721, nft1155);
 
         vm.prank(deployer);
         campaigns.grantHostRole(address(handler));
@@ -52,7 +58,7 @@ contract NFTInventoryInvariant is StdInvariant, Test {
             uint256 id = handler.erc721CampaignAt(i);
             uint256 tokenId = handler.erc721TokenIdOf(id);
             bool resolved = handler.erc721Resolved(id);
-            bool escrowed = campaigns.isERC721Escrowed(id, address(nft721), tokenId);
+            bool escrowed = nftModule.isERC721Escrowed(id, address(nft721), tokenId);
 
             if (resolved) {
                 assertFalse(escrowed, "resolved ERC721 still marked escrowed");
@@ -83,7 +89,7 @@ contract NFTInventoryInvariant is StdInvariant, Test {
             uint256 id = handler.erc1155CampaignAt(i);
             if (!handler.erc1155SweepResolved(id)) continue;
             assertEq(
-                campaigns.getERC1155Escrowed(id, address(nft1155), 1), 0, "residue left in swept ERC1155 campaign slice"
+                nftModule.getERC1155Escrowed(id, address(nft1155), 1), 0, "residue left in swept ERC1155 campaign slice"
             );
         }
     }
@@ -95,7 +101,7 @@ contract NFTInventoryInvariant is StdInvariant, Test {
         uint256 n = handler.erc1155CampaignCount();
         for (uint256 i; i < n; ++i) {
             uint256 id = handler.erc1155CampaignAt(i);
-            owed += campaigns.getERC1155Escrowed(id, address(nft1155), 1);
+            owed += nftModule.getERC1155Escrowed(id, address(nft1155), 1);
         }
         assertGe(nft1155.balanceOf(address(campaigns), 1), owed, "ERC1155 per-campaign backing underwater");
     }
