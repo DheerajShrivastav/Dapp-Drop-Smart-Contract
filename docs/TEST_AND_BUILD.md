@@ -1,6 +1,6 @@
 # Test Coverage & Build — Web3Campaigns
 
-> As of `feature/protocol-fee-module` (off `dev` post-PR #8).
+> As of `feature/protocol-fee-module` (off `dev` post-PR #8, merged forward with PR #9).
 
 ## Toolchain (now set up)
 
@@ -8,7 +8,7 @@ Foundry **1.7.1** installed (`~/.foundry/bin` — `export PATH="$HOME/.foundry/b
 
 To build/run from a clean clone: `git submodule update --init --recursive` → `forge build` → `forge test`.
 
-## Test suites (143 passing, 12 suites)
+## Test suites (145 passing, 13 suites)
 
 Unit/example-based:
 - `test/CampaignStorage.t.sol` (11) — lifecycle/access/batch/withdrawETH; batch task verification via `batchVerifyTaskCompletionWithSignatures`.
@@ -25,6 +25,7 @@ Stateful-fuzz invariant suites (`test/invariant/`) — each pairs a `*Handler.so
 - **`NFTInventory.invariant.t.sol`** (4 invariants) — same lifecycle for ERC721 (unique tokenIds) and ERC1155 (single shared asset id across all campaigns, deliberately fuzzing the commingled-pool case). Confirmed the NFT design does **not** have the ERC20 bug — `claimNFT` and `withdrawUnclaimed*` share the same per-campaign map.
 - **`AttestationVersion.invariant.t.sol`** (2 invariants) — adversarially fuzzes stale-version replay, skip-ahead, non-signer, and expired-deadline attempts against the signed-attestation replay guard via `try/catch` (not `vm.expectRevert`, which would mask a real bypass under `fail_on_revert=false` — see Known Issues below); confirms the on-chain version only ever advances by exactly 1 via a genuinely valid signature. (An earlier `afterInvariant()` coverage-sanity hook was removed — it was a per-run check that could legitimately fail on a short run that happened to miss one path, and Foundry replays such failures as cached deterministic counterexamples; the call-summary table already shows both paths are exercised copiously.)
 - **`OnChainReward.invariant.t.sol`** (4 invariants) — RANK_TIERED settlement + per-campaign module pinning, including a `rotateGlobalModule` handler action that swaps the admin-rotatable default mid-run: `invariant_globalTokenAccounting` (`sum(on-chain claims) <= escrowed`, exactly), `invariant_claimAtMostOncePerParticipant` (`claim()` deliberately retries a participant who already succeeded, so this exercises the module's own double-claim guard rather than trusting the handler), `invariant_rankAssignmentsAreDistinct` (no duplicate ranks within a campaign), `invariant_pinnedModuleNeverChanges` (a campaign's pin never moves, across any number of rotations). Validated non-vacuous with a negative control before merge (temporarily broke `getCampaignRewardModule`, confirmed the pin invariant failed, reverted).
+- **`RootDisputeWindow.invariant.t.sol`** (2 invariants) — covers both the ERC20 and NFT Merkle root dispute window (`ROOT_DISPUTE_WINDOW`), including a `warpForward` handler action (mirrors `sweep`'s big grace-period warp in the other suites) so both the "claim succeeds" and "claim correctly rejected" branches get meaningfully exercised. A ghost mirror (`erc20ExpectedClaimableAt`/`nftExpectedClaimableAt`) independently reconstructs the rearm rule (rearm only on a genuine root-value change) and is cross-checked every run against `getERC20ClaimableAt`/`getNFTClaimableAt`: `invariant_ERC20ClaimableAtMatchesGhostRearmRule`, `invariant_NFTClaimableAtMatchesGhostRearmRule`. `attemptERC20Claim`/`attemptNFTClaim` additionally predict, per attempt, whether a claim MUST succeed or MUST revert `RootDisputeWindowActive`, asserting the actual outcome via try/catch with a loud revert on the wrong branch (this project's established pattern from `AttestationVersionHandler`, since `fail_on_revert=false` would otherwise silently discard a violation in either direction). Caught a real bug in the handler itself during development (a missing `vm.prank(participant)` meant every claim executed as the handler contract, so proof verification never matched) — the loud-revert design is what surfaced it rather than the suite passing vacuously. A deliberate "did both outcomes get exercised" liveness invariant was **not** added: Foundry evaluates every `invariant_*` once immediately after `setUp()` too (runs=0, calls=0), so an `assertGt(ghost, 0)` check fails unconditionally regardless of what happens afterward — this project already hit and removed the equivalent `afterInvariant()` coverage hook on `AttestationVersion.invariant.t.sol` for the same reason (see Known Issues). Non-vacuousness was instead confirmed manually: a forced single continuous run (`FOUNDRY_INVARIANT_RUNS=1 FOUNDRY_INVARIANT_DEPTH=3000`) showed all four ghost counters nonzero (`erc20Success=104, erc20Revert=1, nftSuccess=80, nftRevert=3`) with zero unexpected outer reverts.
 
 Claim tests build real Merkle proofs via Solidity helpers matching the OZ StandardMerkleTree + sorted-pair convention. Signature tests/handlers build real EIP-712 digests/signatures via `vm.sign` against a locally-computed domain separator mirroring `CampaignStorage`'s `TASK_ATTESTATION_TYPEHASH`.
 
@@ -33,7 +34,6 @@ Claim tests build real Merkle proofs via Solidity helpers matching the OZ Standa
 - Multi-leaf NFT proofs in the unit suite (current NFT unit tests use single-leaf roots; the invariant suite exercises many campaigns but each with its own single-leaf root) — a dedicated 2+ leaf NFT tree unit test would still add value.
 - No invariant coverage yet for the reward-configuration side (e.g., `configureERC20Reward`/deposit access control fuzzing) — current invariants focus on the settlement/claim/sweep lifecycle.
 - No dedicated invariant/fuzz test for `cancelCampaign` yet (unit tests only) — a candidate property: cancelling never leaves more ERC20 escrowed in the contract than `_erc20Escrowed[id]` (i.e., the refund always fully drains what was owed).
-- No invariant/fuzz coverage for the root dispute window yet (unit tests only) — a candidate property: no `claimERC20`/`claimNFT` ever succeeds when `block.timestamp < claimableAt`, fuzzed across many campaigns with randomized publish/republish timing.
 
 ## Known issues
 - CI (`.github/workflows/test.yml`) runs `forge fmt --check`, `forge build --sizes`, `forge test -vvv` under `FOUNDRY_PROFILE=ci`, but `foundry.toml` defines no `[profile.ci]` (falls back to default). Cosmetic.
