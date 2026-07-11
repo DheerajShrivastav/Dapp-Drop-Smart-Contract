@@ -18,6 +18,24 @@ contract EvilFeeModule is IFeeModule {
     }
 }
 
+/// @notice A second misbehaving IFeeModule used only to exercise Web3Campaigns' defensive
+/// treasury == address(0) guard -- the reference FeeModule can never produce this (both its
+/// constructor and setTreasury reject address(0)), so a real module can't reach this path either.
+contract EvilFeeModuleZeroTreasury is IFeeModule {
+    function computeFee(uint256, uint256 amount) external pure returns (uint256 feeAmount, address treasury) {
+        feeAmount = amount / 10; // a plausible, in-bounds fee
+        treasury = address(0); // but nowhere to send it
+    }
+}
+
+/// @notice A module that always returns (0, address(0)) -- used to confirm the zero-treasury guard
+/// only fires when there's an actual fee to send, not merely because treasury happens to be unset.
+contract ZeroFeeZeroTreasuryModule is IFeeModule {
+    function computeFee(uint256, uint256) external pure returns (uint256 feeAmount, address treasury) {
+        return (0, address(0));
+    }
+}
+
 /// @notice Covers the protocol-fee module: the standalone FeeModule contract itself, and its
 /// wiring into Web3Campaigns' fundCampaignERC20 (a satellite split mirroring OnChainRewardModule --
 /// see docs/ARCHITECTURE.md).
@@ -241,6 +259,45 @@ contract FeeModuleTest is Test {
         vm.expectRevert(CampaignStorage.Web3Campaigns__FeeExceedsAmount.selector);
         campaigns.fundCampaignERC20(id, 100 ether);
         vm.stopPrank();
+    }
+
+    /// @notice A misbehaving module returning a nonzero fee with a zero treasury is rejected
+    /// explicitly (Web3Campaigns__InvalidFeeTreasury) rather than reaching safeTransfer(address(0),
+    /// ...) -- which reverts on standard OZ tokens (a self-inflicted funding DoS) but could silently
+    /// burn the skimmed fee on a permissive/non-standard token. Symmetric with the feeAmount >
+    /// amount guard above. The reference FeeModule can never trigger this (constructor + setTreasury
+    /// both reject address(0)), so this uses a deliberately-evil mock.
+    function test_FundCampaignERC20_RevertsIfTreasuryIsZeroAddress() public {
+        EvilFeeModuleZeroTreasury evil = new EvilFeeModuleZeroTreasury();
+        vm.prank(deployer);
+        campaigns.setFeeModule(address(evil));
+
+        uint256 id = _draftCampaign();
+
+        vm.startPrank(host1);
+        token.approve(address(campaigns), 100 ether);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidFeeTreasury.selector);
+        campaigns.fundCampaignERC20(id, 100 ether);
+        vm.stopPrank();
+    }
+
+    /// @notice A module returning feeAmount == 0 alongside treasury == address(0) is fine -- the
+    /// zero-treasury guard only fires when there's actually a fee to send, matching the existing
+    /// "feeAmount > 0" gate on the transfer/event itself.
+    function test_FundCampaignERC20_ZeroFeeWithZeroTreasury_Succeeds() public {
+        ZeroFeeZeroTreasuryModule zeroFee = new ZeroFeeZeroTreasuryModule();
+        vm.prank(deployer);
+        campaigns.setFeeModule(address(zeroFee));
+
+        uint256 id = _draftCampaign();
+
+        vm.startPrank(host1);
+        token.approve(address(campaigns), 100 ether);
+        campaigns.fundCampaignERC20(id, 100 ether);
+        vm.stopPrank();
+
+        (, uint256 escrowed,,,,) = campaigns.getERC20Settlement(id);
+        assertEq(escrowed, 100 ether);
     }
 
     /// @notice Rotating the fee module mid-campaign only affects FUNDING CALLS MADE AFTER the

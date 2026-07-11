@@ -52,6 +52,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__InvalidAmount();
     error Web3Campaigns__NFTNotEscrowed();
     error Web3Campaigns__FeeExceedsAmount();
+    error Web3Campaigns__InvalidFeeTreasury();
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();

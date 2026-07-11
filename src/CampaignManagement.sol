@@ -264,6 +264,14 @@ contract CampaignManagement is CampaignStorage {
             if (feeAmount > _amount) {
                 revert Web3Campaigns__FeeExceedsAmount();
             }
+            // The reference FeeModule can never return a zero treasury alongside a nonzero fee (both
+            // its constructor and setTreasury reject address(0)), but a DIFFERENT module registered
+            // via setFeeModule could -- guard it explicitly rather than letting safeTransfer(0, ...)
+            // either revert (a self-inflicted funding DoS on standard tokens) or silently burn the
+            // skimmed fee (on a permissive/non-standard token).
+            if (feeAmount > 0 && treasury == address(0)) {
+                revert Web3Campaigns__InvalidFeeTreasury();
+            }
         }
         uint256 escrowAmount = _amount - feeAmount;
 
