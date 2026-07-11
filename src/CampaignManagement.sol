@@ -6,6 +6,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IFeeModule} from "./IFeeModule.sol";
 
 // This contract manages campaign creation, task addition, reward setting,
 // and campaign status updates. It also handles host role management.
@@ -251,13 +252,40 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__CampaignAlreadyEnded();
         }
 
+        // Optional protocol-fee skim: the host still transfers the full _amount from their wallet;
+        // this contract splits it between campaign escrow and the fee module's treasury. No fee
+        // module registered (the default) means feeAmount is always 0 and behavior is unchanged.
+        // computeFee is a `view` call -- Solidity emits a STATICCALL for it, so a malicious module
+        // cannot reenter with a state-changing call from inside this computation.
+        uint256 feeAmount;
+        address treasury;
+        if (_feeModule != address(0)) {
+            (feeAmount, treasury) = IFeeModule(_feeModule).computeFee(_campaignId, _amount);
+            if (feeAmount > _amount) {
+                revert Web3Campaigns__FeeExceedsAmount();
+            }
+            // The reference FeeModule can never return a zero treasury alongside a nonzero fee (both
+            // its constructor and setTreasury reject address(0)), but a DIFFERENT module registered
+            // via setFeeModule could -- guard it explicitly rather than letting safeTransfer(0, ...)
+            // either revert (a self-inflicted funding DoS on standard tokens) or silently burn the
+            // skimmed fee (on a permissive/non-standard token).
+            if (feeAmount > 0 && treasury == address(0)) {
+                revert Web3Campaigns__InvalidFeeTreasury();
+            }
+        }
+        uint256 escrowAmount = _amount - feeAmount;
+
         // Effects before interaction (escrow tracked on measured received amount would be
         // ideal for fee-on-transfer tokens; standard tokens are assumed here).
-        _erc20Escrowed[_campaignId] += _amount;
+        _erc20Escrowed[_campaignId] += escrowAmount;
 
         IERC20(token).safeTransferFrom(msg.sender, address(this), _amount);
+        if (feeAmount > 0) {
+            IERC20(token).safeTransfer(treasury, feeAmount);
+            emit ProtocolFeeCollected(_campaignId, treasury, feeAmount);
+        }
 
-        emit CampaignFundedERC20(_campaignId, msg.sender, _amount);
+        emit CampaignFundedERC20(_campaignId, msg.sender, escrowAmount);
     }
 
     /**

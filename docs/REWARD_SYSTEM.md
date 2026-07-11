@@ -14,7 +14,7 @@ State (CampaignStorage.sol): `_erc20RewardToken`, `_erc20Escrowed`, `_erc20Distr
 
 Host flow (CampaignManagement.sol):
 1. `configureERC20Reward(id, token)` — Draft only; records the reward token. **Does not commit a settlement mode** — token configuration is common to all three ERC20 paths, so MERKLE is committed later by `setERC20MerkleRoot`, and the tiered modes by the module (see "On-chain tiered settlement" below).
-2. `fundCampaignERC20(id, amount)` — escrows tokens INTO the contract via `SafeERC20.safeTransferFrom(host -> contract)`. Allowed in Draft/Open/Ended (top-up). `_erc20Escrowed += amount`.
+2. `fundCampaignERC20(id, amount)` — escrows tokens INTO the contract via `SafeERC20.safeTransferFrom(host -> contract)`. Allowed in Draft/Open/Ended (top-up). **If a protocol-fee module is registered** (see "Protocol fee" below), a fee is skimmed here: `_erc20Escrowed += (amount - feeAmount)`, and `feeAmount` is forwarded to the module's treasury in the same call. With no fee module (`_feeModule == address(0)`, the default), behavior is unchanged: `_erc20Escrowed += amount`.
 3. `endCampaign(id)` — at/after `endTime`.
 4. `setERC20MerkleRoot(id, root)` — Ended only; commits off-chain allocations **and commits the campaign to MERKLE settlement** (the mutual-exclusion lock — reverts `SettlementModeAlreadySet` if the campaign already adopted a tiered mode). Updatable while Ended, frozen at Closed.
 5. `withdrawUnclaimedERC20(id)` — after Closed + `CLAIM_GRACE_PERIOD` (30 days); sweeps `escrowed - distributed` to host; single-sweep guarded by `_erc20Swept`.
@@ -24,6 +24,14 @@ Participant claim (ParticipantManagement.sol):
 - Off-chain tooling must build the tree with `@openzeppelin/merkle-tree` using leaf encoding `["address","uint256"]` to match.
 
 Views (CampaignViewFunctions.sol): `getERC20Settlement(id)` → (token, escrowed, distributed, merkleRoot, closedAt, swept); `hasClaimedERC20(id, account)`; `getERC20ClaimableAt(id)` → timestamp claims open (0 if no root yet).
+
+## Protocol fee (optional, applies to `fundCampaignERC20` on any ERC20 settlement path)
+
+`fundCampaignERC20` checks the admin-rotatable `_feeModule` (`setFeeModule`/`getFeeModule` — a satellite contract, mirroring `OnChainRewardModule`; see [ARCHITECTURE.md](ARCHITECTURE.md)). If registered, it calls `IFeeModule(_feeModule).computeFee(id, amount)` (a `view` call — a `STATICCALL`, so the module cannot reenter with a state-changing call), skims the returned `feeAmount` to the returned `treasury`, and escrows `amount - feeAmount`. The host still pays the full `amount` from their wallet in one `safeTransferFrom`; `feeAmount` is then forwarded on in a second transfer within the same call. Emits `ProtocolFeeCollected(id, treasury, feeAmount)` alongside the existing `CampaignFundedERC20` (which now reports the **net escrowed** amount, not the gross amount the host paid).
+
+With no fee module registered (`_feeModule == address(0)`, the default), behavior is byte-for-byte unchanged from before this feature existed.
+
+Applies **only** to `fundCampaignERC20` — NFT deposits and the on-chain tiered path are not fee-skimmed (v1 scope). Unlike reward-module rotation, a fee-module rotation carries no in-flight hazard and needs no per-campaign pinning: `computeFee` has no persistent per-campaign state, so a rotation only changes the rate/treasury for funding calls made *after* it.
 
 ## ERC20 on-chain tiered settlement (RANK_TIERED / SCORE_TIERED) — dispute-free alternative
 

@@ -224,6 +224,19 @@ contract Web3Campaigns is
         emit OnChainRewardModuleUpdated(_module);
     }
 
+    /**
+     * @notice Register (or rotate) the trusted protocol-fee module, or disable fees (address(0)).
+     * @dev Admin-rotatable, same pattern as setOnChainRewardModule. Unlike that module, rotating
+     *      this one carries no in-flight-campaign hazard: fee computation has no persistent
+     *      per-campaign state (see IFeeModule.sol) -- a rotation only changes the rate/treasury used
+     *      by fundCampaignERC20 calls made AFTER it, which is the intended effect.
+     * @param _module The new fee module address (may be address(0) to disable fees).
+     */
+    function setFeeModule(address _module) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _feeModule = _module;
+        emit FeeModuleUpdated(_module);
+    }
+
     // ---- NFT (multi-standard) settlement wrappers ----
 
     function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
