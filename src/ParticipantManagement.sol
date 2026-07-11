@@ -436,76 +436,37 @@ contract ParticipantManagement is CampaignStorage {
     }
 
     /**
-     * @notice Claim an NFT reward (ERC721 or ERC1155) via post-campaign Merkle settlement.
-     * @dev Allocations are computed off-chain and committed by the host (setNFTMerkleRoot).
-     *      Leaf: keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
-     *      Pays from the per-campaign escrow; the escrow ownership maps prevent draining another
-     *      campaign's NFTs. nonReentrant + whenNotPaused via the Web3Campaigns wrapper.
+     * @notice Trusted callback: the campaign's pinned NFTSettlementModule has already validated a
+     *         claim or a host sweep (proof, escrow, dispute window, sweepability) and calls this to
+     *         actually move the token out of Web3Campaigns' custody -- the module never holds NFTs
+     *         itself. No further validation happens here; the module is trusted for correctness of
+     *         WHO/WHAT/HOW MUCH, this function only executes the transfer.
+     * @dev Restricted to msg.sender == the campaign's pinned module (not the rotatable global
+     *      default -- same rationale as payOnChainReward's per-campaign pin check).
      * @param _campaignId Campaign ID
      * @param _standard NFT standard (ERC721 or ERC1155)
      * @param _token NFT contract address
      * @param _tokenId Token id (specific NFT for ERC721; id for ERC1155)
-     * @param _amount Quantity (1 for ERC721; arbitrary for ERC1155) — must match the tree leaf
-     * @param _proof Merkle proof for the leaf
+     * @param _amount Quantity (ignored for ERC721; the ERC1155 quantity otherwise)
+     * @param _recipient Who receives the NFT (the claimant, or the host on a sweep)
      */
-    function claimNFT(
+    function executeNFTTransferOut(
         uint256 _campaignId,
         NFTStandard _standard,
         address _token,
         uint256 _tokenId,
         uint256 _amount,
-        bytes32[] calldata _proof
+        address _recipient
     ) public virtual {
-        Campaign storage campaign = _campaigns[_campaignId];
-
-        if (campaign.id == 0) {
-            revert Web3Campaigns__CampaignNotFound();
+        if (msg.sender != _campaignNFTModule[_campaignId]) {
+            revert Web3Campaigns__NFTModuleMismatch(_campaignId, _campaignNFTModule[_campaignId], msg.sender);
         }
-        if (campaign.status != CampaignStatus.Ended && campaign.status != CampaignStatus.Closed) {
-            revert Web3Campaigns__CampaignNotYetEnded();
-        }
-
-        bytes32 root = _nftMerkleRoot[_campaignId];
-        if (root == bytes32(0)) {
-            revert Web3Campaigns__MerkleRootNotSet();
-        }
-        // Dispute window: gives the community time to catch an unfair root before any NFTs move
-        // against it. Rearmed only when the published root VALUE actually changes (including a host's own correction), not by a no-op republish.
-        uint256 claimableAt = _nftRootSetAt[_campaignId] + ROOT_DISPUTE_WINDOW;
-        if (block.timestamp < claimableAt) {
-            revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
-        }
-
-        bytes32 leaf =
-            keccak256(bytes.concat(keccak256(abi.encode(msg.sender, uint8(_standard), _token, _tokenId, _amount))));
-        if (_nftLeafClaimed[_campaignId][leaf]) {
-            revert Web3Campaigns__AlreadyClaimedSettlement();
-        }
-        if (!MerkleProof.verify(_proof, root, leaf)) {
-            revert Web3Campaigns__InvalidMerkleProof();
-        }
-
-        // Effects (CEI): mark the leaf claimed and decrement campaign escrow before transfer.
-        _nftLeafClaimed[_campaignId][leaf] = true;
 
         if (_standard == NFTStandard.ERC721) {
-            if (!_escrowedERC721[_campaignId][_token][_tokenId]) {
-                revert Web3Campaigns__NFTNotEscrowed();
-            }
-            _escrowedERC721[_campaignId][_token][_tokenId] = false;
-
-            IERC721(_token).safeTransferFrom(address(this), msg.sender, _tokenId);
+            IERC721(_token).safeTransferFrom(address(this), _recipient, _tokenId);
         } else {
-            uint256 held = _escrowedERC1155[_campaignId][_token][_tokenId];
-            if (_amount == 0 || _amount > held) {
-                revert Web3Campaigns__NFTNotEscrowed();
-            }
-            _escrowedERC1155[_campaignId][_token][_tokenId] = held - _amount;
-
-            IERC1155(_token).safeTransferFrom(address(this), msg.sender, _tokenId, _amount, "");
+            IERC1155(_token).safeTransferFrom(address(this), _recipient, _tokenId, _amount, "");
         }
-
-        emit NFTRewardClaimed(_campaignId, msg.sender, _standard, _token, _tokenId, _amount);
     }
 }
 
