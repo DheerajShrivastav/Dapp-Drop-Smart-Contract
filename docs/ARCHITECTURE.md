@@ -18,7 +18,7 @@ AccessControl (OZ) + EIP712 (OZ)
 
 ## Roles
 
-- `DEFAULT_ADMIN_ROLE` — revokeHostRole, withdrawETH, and grants/revokes every other role including `SIGNER_ROLE` (the key-rotation path for compromised backend signers).
+- `DEFAULT_ADMIN_ROLE` — revokeHostRole, setTreasury + withdrawETH (sweeps to the stored treasury, not an arbitrary address), the module setters (`setOnChainRewardModule`/`setFeeModule`/`setNFTSettlementModule`), and grants/revokes every other role including `SIGNER_ROLE` (the key-rotation path for compromised backend signers).
 - `HOST_ROLE` — createCampaign. **Note: `grantHostRole` is intentionally open/unguarded** (anyone can self-grant) per founder decision; see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md).
 - `EMERGENCY_ADMIN` — emergencyPause / emergencyUnpause.
 - `MODERATOR_ROLE` — `flagAccount(user, score)` to set the suspicious-activity gate used in `completeTask`.
