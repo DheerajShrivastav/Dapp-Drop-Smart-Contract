@@ -83,6 +83,17 @@ contract NFTSettlementTest is Test {
         return new bytes32[](0);
     }
 
+    /// @dev Commutative pair hash, matching OZ MerkleProof's sorted-pair convention.
+    function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
+        return a < b ? keccak256(abi.encodePacked(a, b)) : keccak256(abi.encodePacked(b, a));
+    }
+
+    /// @dev A single-element proof (the sibling leaf) for a balanced 2-leaf tree.
+    function _siblingProof(bytes32 sibling) internal pure returns (bytes32[] memory p) {
+        p = new bytes32[](1);
+        p[0] = sibling;
+    }
+
     // --- arrays helpers ---
     function _ids(uint256 a) internal pure returns (uint256[] memory arr) {
         arr = new uint256[](1);
@@ -134,6 +145,51 @@ contract NFTSettlementTest is Test {
 
         assertEq(nft721.ownerOf(1), p1);
         assertFalse(nftModule.isERC721Escrowed(id, address(nft721), 1));
+    }
+
+    /// @dev All prior NFT claim tests use single-leaf roots (empty proofs). This exercises the
+    /// actual MerkleProof.verify path over a real 2-leaf tree: two participants each claim a
+    /// distinct escrowed tokenId from the same campaign, each with a genuine single-sibling proof.
+    function test_ClaimERC721_MultiLeafTree_BothParticipantsClaim() public {
+        address p2 = vm.addr(7);
+
+        // Balanced 2-leaf tree: p1 -> tokenId 1, p2 -> tokenId 2.
+        bytes32 leaf1 = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        bytes32 leaf2 = _nftLeaf(p2, 0, address(nft721), 2, 1);
+        bytes32 root = _hashPair(leaf1, leaf2);
+
+        uint256 id = _setup721(_ids2(1, 2), root);
+
+        // p1 claims tokenId 1 with leaf2 as its proof sibling.
+        vm.prank(p1);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _siblingProof(leaf2));
+        assertEq(nft721.ownerOf(1), p1);
+
+        // p2 claims tokenId 2 with leaf1 as its proof sibling.
+        vm.prank(p2);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 2, 1, _siblingProof(leaf1));
+        assertEq(nft721.ownerOf(2), p2);
+
+        assertFalse(nftModule.isERC721Escrowed(id, address(nft721), 1));
+        assertFalse(nftModule.isERC721Escrowed(id, address(nft721), 2));
+    }
+
+    /// @dev In the same 2-leaf tree, a claimant supplying the WRONG sibling proof must be rejected
+    /// (the proof no longer recomputes the published root) -- guards against the multi-leaf path
+    /// accepting a malformed proof.
+    function test_ClaimERC721_MultiLeafTree_RevertsOnWrongProof() public {
+        address p2 = vm.addr(7);
+
+        bytes32 leaf1 = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        bytes32 leaf2 = _nftLeaf(p2, 0, address(nft721), 2, 1);
+        bytes32 root = _hashPair(leaf1, leaf2);
+
+        uint256 id = _setup721(_ids2(1, 2), root);
+
+        // p1 supplies its OWN leaf as the sibling instead of leaf2 -> recomputed root won't match.
+        vm.prank(p1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidMerkleProof.selector);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _siblingProof(leaf1));
     }
 
     function test_ClaimERC721_RevertsOnDoubleClaim() public {
@@ -303,6 +359,26 @@ contract NFTSettlementTest is Test {
     /*//////////////////////////////////////////////////////////////
                           DEPOSIT / SWEEP
     //////////////////////////////////////////////////////////////*/
+
+    function test_DepositERC721_RevertsOnEOA() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotAContract.selector);
+        campaigns.depositERC721Rewards(id, vm.addr(0xE0A), _ids(1));
+        vm.stopPrank();
+    }
+
+    function test_DepositERC1155_RevertsOnEOA() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 10;
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotAContract.selector);
+        campaigns.depositERC1155Rewards(id, vm.addr(0xE0A), _ids(1), amounts);
+        vm.stopPrank();
+    }
 
     function test_DepositERC721_RecordsEscrowAndCustody() public {
         uint256 startTime = block.timestamp + START_OFFSET;

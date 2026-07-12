@@ -6,7 +6,7 @@
 
 The blockchain's job here is to **guarantee payment from escrow**; distribution *math* (fixed/tiered/FCFS/sybil-filtering) is computed **off-chain** after the campaign ends and committed as a Merkle root. This removes live-claim front-running, silent-zero claims, and the host-wallet rug/brick vector.
 
-There is **no ETH reward path** — ETH only enters via `receive()` and is recoverable by admin via `withdrawETH`.
+There is **no ETH reward path** — ETH only enters via `receive()` and is recoverable by admin via `withdrawETH()`, which sweeps the balance to a stored, admin-settable treasury (`setTreasury`), not an arbitrary caller-supplied address (see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #10).
 
 ## ERC20 (DONE — Stage B1)
 

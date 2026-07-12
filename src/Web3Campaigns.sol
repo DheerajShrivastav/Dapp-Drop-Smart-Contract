@@ -91,20 +91,40 @@ contract Web3Campaigns is
     }
 
     /**
-     * @notice Withdraw ETH from the contract to prevent locked ether
+     * @notice Set (or rotate) the treasury address that withdrawETH sends to.
+     * @dev The withdrawETH destination is a stored, admin-settable address rather than an arbitrary
+     *      per-call recipient, so a DEFAULT_ADMIN_ROLE key cannot sweep contract ETH to an unbounded
+     *      destination (closes the arbitrary-send-eth surface -- see docs/SECURITY_FINDINGS.md #10).
+     *      Rejects address(0); withdrawETH itself reverts while the treasury is still unset.
+     * @param _newTreasury The address to receive future withdrawETH sweeps.
      */
-    function withdrawETH(address payable _to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
-        if (_to == address(0)) {
+    function setTreasury(address _newTreasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (_newTreasury == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
+        }
+        _treasury = _newTreasury;
+        emit TreasuryUpdated(_newTreasury);
+    }
+
+    /**
+     * @notice Withdraw the contract's ETH balance to the configured treasury.
+     * @dev Destination is the stored `_treasury` (set via setTreasury), NOT a caller-supplied
+     *      address -- this is the restriction that clears the arbitrary-send-eth finding. Reverts
+     *      TreasuryNotSet if no treasury has been configured yet.
+     */
+    function withdrawETH() external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        address to = _treasury;
+        if (to == address(0)) {
+            revert Web3Campaigns__TreasuryNotSet();
         }
         uint256 balance = address(this).balance;
         if (balance == 0) {
             revert Web3Campaigns__TransferFailed();
         }
 
-        emit EtherWithdrawn(_to, balance);
+        emit EtherWithdrawn(to, balance);
 
-        (bool success,) = _to.call{value: balance}("");
+        (bool success,) = to.call{value: balance}("");
         if (!success) {
             revert Web3Campaigns__TransferFailed();
         }
