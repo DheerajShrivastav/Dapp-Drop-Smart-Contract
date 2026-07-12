@@ -253,16 +253,31 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__CampaignAlreadyEnded();
         }
 
-        // Optional protocol-fee skim: the host still transfers the full _amount from their wallet;
-        // this contract splits it between campaign escrow and the fee module's treasury. No fee
-        // module registered (the default) means feeAmount is always 0 and behavior is unchanged.
-        // computeFee is a `view` call -- Solidity emits a STATICCALL for it, so a malicious module
-        // cannot reenter with a state-changing call from inside this computation.
+        // Fee-on-transfer support: pull _amount but measure what actually landed via
+        // balanceOf-before/after, rather than trusting _amount. A fee-on-transfer token can skim
+        // its own cut in transit, so crediting escrow with the nominal _amount would silently
+        // over-credit beyond what the contract can ever pay out. This necessarily runs the
+        // transfer-in (an interaction) before escrow accounting (an effect) can be computed, since
+        // the received amount isn't knowable until after the transfer completes -- the
+        // nonReentrant guard on the Web3Campaigns wrapper is what makes this safe, the same
+        // balance-diff pattern used throughout DeFi for the same reason.
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(msg.sender, address(this), _amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        if (received == 0) {
+            revert Web3Campaigns__NoFundsReceived();
+        }
+
+        // Optional protocol-fee skim, computed on what was actually RECEIVED (not the nominal
+        // _amount a fee-on-transfer token may have already skimmed from before it reached here).
+        // No fee module registered (the default) means feeAmount is always 0 and behavior is
+        // unchanged. computeFee is a `view` call -- Solidity emits a STATICCALL for it, so a
+        // malicious module cannot reenter with a state-changing call from inside this computation.
         uint256 feeAmount;
         address treasury;
         if (_feeModule != address(0)) {
-            (feeAmount, treasury) = IFeeModule(_feeModule).computeFee(_campaignId, _amount);
-            if (feeAmount > _amount) {
+            (feeAmount, treasury) = IFeeModule(_feeModule).computeFee(_campaignId, received);
+            if (feeAmount > received) {
                 revert Web3Campaigns__FeeExceedsAmount();
             }
             // The reference FeeModule can never return a zero treasury alongside a nonzero fee (both
@@ -274,13 +289,10 @@ contract CampaignManagement is CampaignStorage {
                 revert Web3Campaigns__InvalidFeeTreasury();
             }
         }
-        uint256 escrowAmount = _amount - feeAmount;
+        uint256 escrowAmount = received - feeAmount;
 
-        // Effects before interaction (escrow tracked on measured received amount would be
-        // ideal for fee-on-transfer tokens; standard tokens are assumed here).
         _erc20Escrowed[_campaignId] += escrowAmount;
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), _amount);
         if (feeAmount > 0) {
             IERC20(token).safeTransfer(treasury, feeAmount);
             emit ProtocolFeeCollected(_campaignId, treasury, feeAmount);
