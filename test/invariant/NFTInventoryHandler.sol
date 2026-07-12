@@ -4,6 +4,7 @@ pragma solidity ^0.8.31;
 import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../../src/Web3Campaigns.sol";
 import {CampaignStorage} from "../../src/CampaignStorage.sol";
+import {NFTSettlementModule} from "../../src/NFTSettlementModule.sol";
 import {MockERC721, MockERC1155} from "../NFTSettlement.t.sol";
 import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 
@@ -19,6 +20,7 @@ import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155
 /// sweep on one campaign must never be payable out of another campaign's slice.
 contract NFTInventoryHandler is Test, ERC1155Holder {
     Web3Campaigns public campaigns;
+    NFTSettlementModule public nftModule;
     MockERC721 public nft721;
     MockERC1155 public nft1155;
     address public participant = address(0xBEEF);
@@ -41,8 +43,9 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
     uint256 public ghost_erc1155Claimed;
     uint256 public ghost_erc1155Swept;
 
-    constructor(Web3Campaigns _campaigns, MockERC721 _nft721, MockERC1155 _nft1155) {
+    constructor(Web3Campaigns _campaigns, NFTSettlementModule _nftModule, MockERC721 _nft721, MockERC1155 _nft1155) {
         campaigns = _campaigns;
+        nftModule = _nftModule;
         nft721 = _nft721;
         nft1155 = _nft1155;
     }
@@ -76,7 +79,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         campaigns.endCampaign(id);
 
         bytes32 root = _leaf(uint8(CampaignStorage.NFTStandard.ERC721), address(nft721), tokenId, 1);
-        campaigns.setNFTMerkleRoot(id, root);
+        nftModule.setNFTMerkleRoot(id, root);
 
         erc721TokenIdOf[id] = tokenId;
         erc721Campaigns.push(id);
@@ -90,7 +93,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(participant);
-        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof);
         erc721Resolved[id] = true;
     }
 
@@ -104,7 +107,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         vm.warp(block.timestamp + campaigns.CLAIM_GRACE_PERIOD() + 1);
         uint256[] memory ids = new uint256[](1);
         ids[0] = tokenId;
-        campaigns.withdrawUnclaimedERC721(id, address(nft721), ids);
+        nftModule.withdrawUnclaimedERC721(id, address(nft721), ids);
         erc721Resolved[id] = true;
     }
 
@@ -129,7 +132,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
 
         uint256 alloc = bound(allocSeed, 0, amount); // participant's slice <= this campaign's deposit
         bytes32 root = _leaf(uint8(CampaignStorage.NFTStandard.ERC1155), address(nft1155), ASSET_ID, alloc);
-        campaigns.setNFTMerkleRoot(id, root);
+        nftModule.setNFTMerkleRoot(id, root);
 
         erc1155DepositedOf[id] = amount;
         erc1155AllocOf[id] = alloc;
@@ -144,7 +147,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         bytes32[] memory proof = new bytes32[](0);
 
         vm.prank(participant);
-        campaigns.claimNFT(id, CampaignStorage.NFTStandard.ERC1155, address(nft1155), ASSET_ID, alloc, proof);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC1155, address(nft1155), ASSET_ID, alloc, proof);
         erc1155ClaimResolved[id] = true;
         ghost_erc1155Claimed += alloc;
     }
@@ -167,7 +170,7 @@ contract NFTInventoryHandler is Test, ERC1155Holder {
         ids[0] = ASSET_ID;
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = remaining;
-        campaigns.withdrawUnclaimedERC1155(id, address(nft1155), ids, amounts);
+        nftModule.withdrawUnclaimedERC1155(id, address(nft1155), ids, amounts);
         erc1155SweepResolved[id] = true;
         ghost_erc1155Swept += remaining;
     }

@@ -7,6 +7,7 @@ import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IFeeModule} from "./IFeeModule.sol";
+import {INFTSettlementModule} from "./INFTSettlementModule.sol";
 
 // This contract manages campaign creation, task addition, reward setting,
 // and campaign status updates. It also handles host role management.
@@ -411,13 +412,12 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__BatchTooLarge();
         }
 
-        for (uint256 i; i < len; ++i) {
-            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = true;
-        }
+        // Pin the module BEFORE recording escrow bookkeeping in it -- see _pinNFTModule.
+        address module = _pinNFTModule(_campaignId);
+        INFTSettlementModule(module).recordERC721Deposit(_campaignId, _token, _tokenIds);
 
         emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC721, len);
 
-        // Interactions after effects (CEI)
         for (uint256 i; i < len; ++i) {
             IERC721(_token).safeTransferFrom(msg.sender, address(this), _tokenIds[i]);
         }
@@ -447,131 +447,45 @@ contract CampaignManagement is CampaignStorage {
         if (_amounts.length != len) {
             revert Web3Campaigns__ArrayLengthMismatch();
         }
-
         for (uint256 i; i < len; ++i) {
             if (_amounts[i] == 0) {
                 revert Web3Campaigns__InvalidAmount();
             }
-            _escrowedERC1155[_campaignId][_token][_ids[i]] += _amounts[i];
         }
+
+        address module = _pinNFTModule(_campaignId);
+        INFTSettlementModule(module).recordERC1155Deposit(_campaignId, _token, _ids, _amounts);
 
         emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC1155, len);
 
         IERC1155(_token).safeBatchTransferFrom(msg.sender, address(this), _ids, _amounts, "");
     }
 
-    /**
-     * @notice Publish (or update) the NFT reward Merkle root for settlement.
-     * @dev Only after the campaign has Ended. Leaf format:
-     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
-     *      Updatable while Ended, frozen at Closed. Publishing a NEW root value rearms
-     *      ROOT_DISPUTE_WINDOW (claimNFT rejects claims against it until the window elapses); a
-     *      no-op republish of the byte-identical root does not rearm.
-     * @param _campaignId Campaign ID
-     * @param _merkleRoot The settlement Merkle root
-     */
-    function setNFTMerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
-        Campaign storage campaign = _campaigns[_campaignId];
-
-        if (campaign.status != CampaignStatus.Ended) {
-            revert Web3Campaigns__CampaignNotYetEnded();
-        }
-        if (_merkleRoot == bytes32(0)) {
-            revert Web3Campaigns__MerkleRootNotSet();
-        }
-
-        // Only rearm the dispute window if the root is actually changing -- see the identical
-        // comment in setERC20MerkleRoot.
-        if (_nftMerkleRoot[_campaignId] != _merkleRoot) {
-            _nftRootSetAt[_campaignId] = uint64(block.timestamp);
-        }
-        _nftMerkleRoot[_campaignId] = _merkleRoot;
-        emit NFTMerkleRootSet(_campaignId, _merkleRoot);
-    }
-
-    /**
-     * @notice Reclaim still-escrowed ERC721 NFTs after the grace period (unclaimed by winners).
-     * @dev Campaign must be Closed and CLAIM_GRACE_PERIOD elapsed. Only tokenIds still escrowed
-     *      (not claimed, not from another campaign) can be reclaimed.
-     */
-    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
-        public
-        virtual
-        onlyHost(_campaignId)
-    {
-        _requireSweepable(_campaignId);
-        uint256 len = _tokenIds.length;
-        if (len == 0 || len > 100) {
-            revert Web3Campaigns__BatchTooLarge();
-        }
-
-        for (uint256 i; i < len; ++i) {
-            if (!_escrowedERC721[_campaignId][_token][_tokenIds[i]]) {
-                revert Web3Campaigns__NFTNotEscrowed();
-            }
-            _escrowedERC721[_campaignId][_token][_tokenIds[i]] = false;
-        }
-
-        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC721, len);
-
-        address host = _campaigns[_campaignId].host;
-        for (uint256 i; i < len; ++i) {
-            IERC721(_token).safeTransferFrom(address(this), host, _tokenIds[i]);
+    /// @dev Pin the campaign's NFT settlement module the first time it receives a deposit (either
+    /// standard) -- this is the first point persistent per-campaign escrow bookkeeping starts
+    /// accumulating, unlike the reward module (which pins at settlement-mode adoption). Idempotent:
+    /// subsequent deposits, even after a later global-module rotation, keep using the SAME pinned
+    /// module, so a rotation can never desync escrow bookkeeping already recorded elsewhere.
+    function _pinNFTModule(uint256 _campaignId) internal returns (address module) {
+        module = _campaignNFTModule[_campaignId];
+        if (module == address(0)) {
+            module = _nftModule;
+            _campaignNFTModule[_campaignId] = module;
+            emit NFTModulePinned(_campaignId, module);
         }
     }
 
-    /**
-     * @notice Reclaim still-escrowed ERC1155 balances after the grace period.
-     */
-    function withdrawUnclaimedERC1155(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _ids,
-        uint256[] calldata _amounts
-    ) public virtual onlyHost(_campaignId) {
-        _requireSweepable(_campaignId);
-        uint256 len = _ids.length;
-        if (len == 0 || len > 100) {
-            revert Web3Campaigns__BatchTooLarge();
-        }
-        if (_amounts.length != len) {
-            revert Web3Campaigns__ArrayLengthMismatch();
-        }
-
-        for (uint256 i; i < len; ++i) {
-            uint256 held = _escrowedERC1155[_campaignId][_token][_ids[i]];
-            if (_amounts[i] == 0 || _amounts[i] > held) {
-                revert Web3Campaigns__NFTNotEscrowed();
-            }
-            _escrowedERC1155[_campaignId][_token][_ids[i]] = held - _amounts[i];
-        }
-
-        emit UnclaimedNFTsWithdrawn(_campaignId, _token, NFTStandard.ERC1155, len);
-
-        IERC1155(_token).safeBatchTransferFrom(address(this), _campaigns[_campaignId].host, _ids, _amounts, "");
-    }
+    // setNFTMerkleRoot / withdrawUnclaimedERC721 / withdrawUnclaimedERC1155 now live on
+    // NFTSettlementModule (called directly by hosts, not through Web3Campaigns) -- see
+    // NFTSettlementModule.sol. Web3Campaigns retains custody and executes their transfers via the
+    // trusted executeNFTTransferOut callback (ParticipantManagement.sol), but no longer performs
+    // the validation itself.
 
     /// @dev Shared status guard for reward deposits (Draft/Open/Ended top-up).
     function _requireFundingStatus(uint256 _campaignId) internal view {
         CampaignStatus s = _campaigns[_campaignId].status;
         if (s != CampaignStatus.Draft && s != CampaignStatus.Open && s != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignAlreadyEnded();
-        }
-    }
-
-    /// @dev Shared guard for unclaimed sweeps: Closed + grace elapsed, OR Cancelled (immediate --
-    /// cancellation is only possible while totalParticipants == 0, so no Merkle root could ever have
-    /// been published and no claim could ever have been made; there is no race to protect against).
-    function _requireSweepable(uint256 _campaignId) internal view {
-        CampaignStatus s = _campaigns[_campaignId].status;
-        if (s == CampaignStatus.Cancelled) {
-            return;
-        }
-        if (s != CampaignStatus.Closed) {
-            revert Web3Campaigns__CampaignNotYetEnded();
-        }
-        if (block.timestamp < _campaignClosedAt[_campaignId] + CLAIM_GRACE_PERIOD) {
-            revert Web3Campaigns__GracePeriodActive();
         }
     }
 
@@ -583,9 +497,9 @@ contract CampaignManagement is CampaignStorage {
      *      bait-and-switch griefing path where a host could otherwise let participants do free
      *      work and then cancel right before Ended to dodge paying out.
      *      Escrowed NFTs (if any) are NOT auto-refunded here since there is no on-chain enumerable
-     *      inventory list per campaign -- call withdrawUnclaimedERC721/withdrawUnclaimedERC1155
-     *      afterward (they become immediately callable once Cancelled, no grace period, for the
-     *      same reason described on _requireSweepable).
+     *      inventory list per campaign -- call NFTSettlementModule.withdrawUnclaimedERC721/1155
+     *      afterward (they become immediately callable once Cancelled, no grace period -- see that
+     *      module's _requireSweepable).
      * @param _campaignId Campaign ID
      */
     function cancelCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {

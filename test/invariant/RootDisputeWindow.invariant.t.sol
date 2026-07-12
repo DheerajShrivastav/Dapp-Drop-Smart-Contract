@@ -4,6 +4,7 @@ pragma solidity ^0.8.31;
 import {Test} from "forge-std/Test.sol";
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Web3Campaigns} from "../../src/Web3Campaigns.sol";
+import {NFTSettlementModule} from "../../src/NFTSettlementModule.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {MockERC721} from "../NFTSettlement.t.sol";
 import {RootDisputeWindowHandler} from "./RootDisputeWindowHandler.sol";
@@ -15,6 +16,7 @@ import {RootDisputeWindowHandler} from "./RootDisputeWindowHandler.sol";
 /// rearm the window -- see the self-griefing fix in docs/SECURITY_FINDINGS.md #14).
 contract RootDisputeWindowInvariant is StdInvariant, Test {
     Web3Campaigns public campaigns;
+    NFTSettlementModule public nftModule;
     ERC20Mock public token;
     MockERC721 public nft721;
     RootDisputeWindowHandler public handler;
@@ -26,9 +28,13 @@ contract RootDisputeWindowInvariant is StdInvariant, Test {
         vm.prank(deployer);
         campaigns = new Web3Campaigns();
 
+        nftModule = new NFTSettlementModule(address(campaigns));
+        vm.prank(deployer);
+        campaigns.setNFTSettlementModule(address(nftModule));
+
         token = new ERC20Mock();
         nft721 = new MockERC721();
-        handler = new RootDisputeWindowHandler(campaigns, token, nft721);
+        handler = new RootDisputeWindowHandler(campaigns, nftModule, token, nft721);
 
         vm.prank(deployer);
         campaigns.grantHostRole(address(handler));
@@ -68,7 +74,7 @@ contract RootDisputeWindowInvariant is StdInvariant, Test {
         for (uint256 i; i < n; ++i) {
             uint256 id = handler.nftAt(i);
             assertEq(
-                campaigns.getNFTClaimableAt(id),
+                nftModule.getNFTClaimableAt(id),
                 handler.nftExpectedClaimableAt(id),
                 "getNFTClaimableAt diverged from the expected rearm rule"
             );

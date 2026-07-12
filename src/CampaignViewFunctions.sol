@@ -196,49 +196,29 @@ contract CampaignViewFunctions is CampaignStorage {
         return _feeModule;
     }
 
+    // getNFTMerkleRoot / getNFTClaimableAt / isNFTLeafClaimed / isERC721Escrowed /
+    // getERC1155Escrowed now live on NFTSettlementModule -- query the module directly (via
+    // getCampaignNFTModule below). Web3Campaigns no longer holds this state itself.
+
     /**
-     * @notice Get the NFT settlement Merkle root for a campaign (bytes32(0) if unset).
+     * @notice The NFTSettlementModule instance pinned as authoritative for a campaign.
+     * @dev address(0) until the campaign's first NFT deposit (either standard), at which point it
+     *      is pinned to the then-current global default and never reassigned -- see
+     *      CampaignManagement._pinNFTModule.
+     * @param _campaignId Campaign ID
+     * @return The pinned module address, or address(0) if the campaign has never received an NFT deposit
      */
-    function getNFTMerkleRoot(uint256 _campaignId) external view returns (bytes32) {
-        return _nftMerkleRoot[_campaignId];
+    function getCampaignNFTModule(uint256 _campaignId) external view returns (address) {
+        return _campaignNFTModule[_campaignId];
     }
 
     /**
-     * @notice When claimNFT will start accepting claims against the currently-published NFT root,
-     *         per ROOT_DISPUTE_WINDOW.
-     * @dev Returns 0 if no root has ever been published for this campaign. A nonzero value in the
-     *      past means the window has already elapsed and claims are open now.
+     * @notice Timestamp a campaign was Closed (0 if not yet Closed). Consumed by
+     *         NFTSettlementModule to check CLAIM_GRACE_PERIOD has elapsed before a sweep.
      * @param _campaignId Campaign ID
      */
-    function getNFTClaimableAt(uint256 _campaignId) external view returns (uint256) {
-        uint64 setAt = _nftRootSetAt[_campaignId];
-        if (setAt == 0) {
-            return 0;
-        }
-        return setAt + ROOT_DISPUTE_WINDOW;
-    }
-
-    /**
-     * @notice Whether a specific NFT settlement leaf has been claimed.
-     * @dev Recompute the leaf as
-     *      keccak256(bytes.concat(keccak256(abi.encode(account, uint8(standard), token, tokenId, amount)))).
-     */
-    function isNFTLeafClaimed(uint256 _campaignId, bytes32 _leaf) external view returns (bool) {
-        return _nftLeafClaimed[_campaignId][_leaf];
-    }
-
-    /**
-     * @notice Whether a given ERC721 tokenId is currently escrowed for a campaign.
-     */
-    function isERC721Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (bool) {
-        return _escrowedERC721[_campaignId][_token][_tokenId];
-    }
-
-    /**
-     * @notice Escrowed ERC1155 balance for a campaign/token/id.
-     */
-    function getERC1155Escrowed(uint256 _campaignId, address _token, uint256 _tokenId) external view returns (uint256) {
-        return _escrowedERC1155[_campaignId][_token][_tokenId];
+    function getCampaignClosedAt(uint256 _campaignId) external view returns (uint64) {
+        return _campaignClosedAt[_campaignId];
     }
 
     // ============================================

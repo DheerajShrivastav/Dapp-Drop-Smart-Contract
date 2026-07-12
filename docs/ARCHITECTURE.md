@@ -43,7 +43,7 @@ Draft → Open → Ended → Closed
 
 ERC20 (Stage B1, done): `configureERC20Reward` (Draft) → `fundCampaignERC20` (escrow into contract) → run campaign → `endCampaign` → `setERC20MerkleRoot` (off-chain allocations; starts a `ROOT_DISPUTE_WINDOW`, currently 24h) → participants `claimERC20(amount, proof)` from escrow once the window elapses (reverts `RootDisputeWindowActive` before then, `AlreadySwept` after host sweep — required because ERC20 escrow is a commingled pool, see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) #3) → after `Closed` + 30-day grace, host `withdrawUnclaimedERC20`. See [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
 
-NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign) → `endCampaign` → `setNFTMerkleRoot` (also starts the dispute window) → participants `claimNFT(standard, token, tokenId, amount, proof)` once it elapses → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. Supports ERC721 + ERC1155; the contract custodies via OZ `ERC721Holder`/`ERC1155Holder`.
+NFT (Stage B2, done): `depositERC721Rewards`/`depositERC1155Rewards` (escrow per campaign, `Web3Campaigns` custodies via OZ `ERC721Holder`/`ERC1155Holder`) → `endCampaign` → `setNFTMerkleRoot` (also starts the dispute window) → participants `claimNFT(standard, token, tokenId, amount, proof)` once it elapses → host `withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` after grace. `setNFTMerkleRoot`/`claimNFT`/`withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` are called on the campaign's `NFTSettlementModule`, not on `Web3Campaigns` directly — see below.
 
 ## On-chain tiered settlement + per-campaign module pinning
 
@@ -64,6 +64,15 @@ A second satellite contract, `FeeModule`, mirrors the `OnChainRewardModule` spli
 - Fee computation has **no persistent per-campaign state at all**: `computeFee` is a pure function of `(amount, the module's current global config)`, evaluated and fully settled — fee transferred, escrow credited — within the single `fundCampaignERC20` call that invoked it. There is nothing left over that a later rotation could orphan or desync. A rotation only changes the rate/treasury used by funding calls made **after** it, which is the intended effect, not a hazard.
 
 The reference `FeeModule` implementation is a flat global basis-point rate (capped at `MAX_FEE_BPS`, sanity bound not policy) with a single rotatable `admin` — deliberately minimal (no OZ `AccessControl` import) to keep this satellite's own EIP-170 footprint small, matching `OnChainRewardModule`'s lightweight-satellite style. `IFeeModule.computeFee`'s `campaignId` parameter is currently unused by this implementation but is kept in the interface so a future per-campaign fee tier can be added without changing the `fundCampaignERC20` call site.
+
+## NFT settlement module (satellite, pinned at first deposit)
+
+A third satellite contract, `NFTSettlementModule`, extracts all NFT Merkle-settlement logic and bookkeeping out of `Web3Campaigns` to reclaim EIP-170 headroom — `Web3Campaigns` still retains 100% of NFT custody (it alone implements `ERC721Holder`/`ERC1155Holder`); the module holds only the Merkle roots, leaf-claimed tracking, and per-campaign escrow accounting, and calls back into `executeNFTTransferOut` (a trusted callback gated to the campaign's pinned module) to actually move a token. Users call `setNFTMerkleRoot`/`claimNFT`/`withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155` directly on the module instance (`getCampaignNFTModule(id)`), mirroring `OnChainRewardModule.claimReward`'s entrypoint shape — `Web3Campaigns` no longer exposes these functions itself.
+
+`_nftModule` is the **global default**, admin-rotatable via `setNFTSettlementModule`. Unlike the reward module (pinned at settlement-mode adoption), the NFT module pins **at first deposit** (`CampaignManagement._pinNFTModule`, called from both `depositERC721Rewards` and `depositERC1155Rewards`):
+- Escrow bookkeeping starts accumulating the moment a deposit lands — before any Merkle root could ever be published — so first-deposit is the earliest point a rotation could otherwise desync per-campaign state. Waiting until `setNFTMerkleRoot` (mirroring the reward module's later trigger) would leave a window between an unpinned deposit and a later root-set where a rotation could orphan already-recorded escrow.
+- The pin is idempotent (`_campaignNFTModule[id]` set once, checked before overwriting) and every module entrypoint independently re-verifies it via `getCampaignNFTModule(id) == address(this)` before acting on its own state — same defense-in-depth self-check pattern as the reward module.
+- A direct consequence: a campaign that never deposits an NFT can never call `setNFTMerkleRoot` (reverts `NotAuthoritativeModule`) — a strictly stronger guarantee than before, closing a drain attempt one step earlier.
 
 ## Task verification (Phase 2 — signed attestations)
 

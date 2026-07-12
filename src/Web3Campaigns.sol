@@ -237,7 +237,24 @@ contract Web3Campaigns is
         emit FeeModuleUpdated(_module);
     }
 
+    /**
+     * @notice Register (or rotate) the trusted default NFTSettlementModule contract address.
+     * @dev Admin-rotatable, same pattern as setOnChainRewardModule. Only affects campaigns that
+     *      have NOT yet received their first NFT deposit -- each campaign pins to whichever module
+     *      was current at that moment (CampaignManagement._pinNFTModule), so a rotation can never
+     *      desync a campaign's already-recorded escrow bookkeeping.
+     * @param _module The new module address (may be address(0) to disable new NFT deposits).
+     */
+    function setNFTSettlementModule(address _module) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _nftModule = _module;
+        emit NFTModuleUpdated(_module);
+    }
+
     // ---- NFT (multi-standard) settlement wrappers ----
+    // setNFTMerkleRoot/claimNFT/withdrawUnclaimedERC721/withdrawUnclaimedERC1155 are no longer
+    // Web3Campaigns functions -- call them directly on the campaign's NFTSettlementModule (see
+    // getCampaignNFTModule). Web3Campaigns keeps custody and deposits; executeNFTTransferOut is the
+    // trusted callback the pinned module uses to move a token once it has validated everything.
 
     function depositERC721Rewards(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
         public
@@ -257,33 +274,16 @@ contract Web3Campaigns is
         super.depositERC1155Rewards(_campaignId, _token, _ids, _amounts);
     }
 
-    function claimNFT(
+    // Secure wrapper for ParticipantManagement.executeNFTTransferOut
+    function executeNFTTransferOut(
         uint256 _campaignId,
         NFTStandard _standard,
         address _token,
         uint256 _tokenId,
         uint256 _amount,
-        bytes32[] calldata _proof
+        address _recipient
     ) public override whenNotPaused nonReentrant {
-        super.claimNFT(_campaignId, _standard, _token, _tokenId, _amount, _proof);
-    }
-
-    function withdrawUnclaimedERC721(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
-        public
-        override
-        whenNotPaused
-        nonReentrant
-    {
-        super.withdrawUnclaimedERC721(_campaignId, _token, _tokenIds);
-    }
-
-    function withdrawUnclaimedERC1155(
-        uint256 _campaignId,
-        address _token,
-        uint256[] calldata _ids,
-        uint256[] calldata _amounts
-    ) public override whenNotPaused nonReentrant {
-        super.withdrawUnclaimedERC1155(_campaignId, _token, _ids, _amounts);
+        super.executeNFTTransferOut(_campaignId, _standard, _token, _tokenId, _amount, _recipient);
     }
 
     /// @dev Resolve the diamond inheritance of supportsInterface (AccessControl + ERC1155Holder).

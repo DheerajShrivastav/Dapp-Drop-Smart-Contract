@@ -71,6 +71,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__NotOnChainRewardModule();
     // Per-campaign module pinning
     error Web3Campaigns__RewardModuleMismatch(uint256 campaignId, address expected, address caller);
+    error Web3Campaigns__NFTModuleMismatch(uint256 campaignId, address expected, address caller);
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -224,14 +225,15 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     mapping(uint256 => uint64) internal _campaignClosedAt; // campaignId => close timestamp (grace start)
     mapping(uint256 => bool) internal _erc20Swept; // campaignId => unclaimed funds reclaimed by host
 
-    // --- Multi-standard NFT (ERC721 + ERC1155) Merkle settlement state ---
-    // NFTs are escrowed per-campaign (the ownership maps below prevent one campaign's
-    // settlement from draining another's escrow), and distributed by Merkle proof after end.
-    mapping(uint256 => bytes32) internal _nftMerkleRoot; // campaignId => NFT settlement root
-    mapping(uint256 => uint64) internal _nftRootSetAt; // campaignId => timestamp root was last (re-)published
-    mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
-    mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
-    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
+    // --- Multi-standard NFT (ERC721 + ERC1155) Merkle settlement ---
+    // All root/leaf-claimed/escrow-bookkeeping STATE lives in the separately-deployed
+    // NFTSettlementModule (its own EIP-170 budget). Web3Campaigns retains all NFT CUSTODY (it alone
+    // implements ERC721Holder/ERC1155Holder) and pins each campaign to the module instance that was
+    // current at its FIRST deposit -- not at first root-set, since escrow bookkeeping starts
+    // accumulating at deposit time, which can precede any root ever being published. See
+    // IWeb3CampaignsForNFTModule.sol / NFTSettlementModule.sol.
+    address internal _nftModule; // trusted contract allowed to call executeNFTTransferOut
+    mapping(uint256 => address) internal _campaignNFTModule; // campaignId => pinned module (0 = unpinned)
 
     // --- On-chain reward settlement (dispute-free alternative to Merkle settlement) ---
     // All tier/score/rank STATE lives in the separately-deployed OnChainRewardModule (its own
@@ -293,18 +295,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event ERC20RewardClaimed(uint256 indexed campaignId, address indexed account, uint256 amount);
     event UnclaimedERC20Swept(uint256 indexed campaignId, address indexed to, uint256 amount);
     event NFTRewardsDeposited(uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count);
-    event NFTMerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
-    event NFTRewardClaimed(
-        uint256 indexed campaignId,
-        address indexed account,
-        NFTStandard standard,
-        address token,
-        uint256 tokenId,
-        uint256 amount
-    );
-    event UnclaimedNFTsWithdrawn(
-        uint256 indexed campaignId, address indexed token, NFTStandard standard, uint256 count
-    );
+    // NFTMerkleRootSet / NFTRewardClaimed / UnclaimedNFTsWithdrawn now live on NFTSettlementModule.
+    event NFTModuleUpdated(address indexed module);
+    // Emitted the first time a campaign is bound to a specific NFTSettlementModule instance.
+    event NFTModulePinned(uint256 indexed campaignId, address indexed module);
 
     // On-Chain Reward Tier Events
     event TaskPointsSet(uint256 indexed campaignId, uint256 count);
