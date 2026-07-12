@@ -209,6 +209,7 @@ contract CampaignManagement is CampaignStorage {
         if (_tokenAddress == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
         }
+        _requireContract(_tokenAddress);
 
         _erc20RewardToken[_campaignId] = _tokenAddress;
 
@@ -419,6 +420,7 @@ contract CampaignManagement is CampaignStorage {
         if (_token == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
         }
+        _requireContract(_token);
         uint256 len = _tokenIds.length;
         if (len == 0 || len > 100) {
             revert Web3Campaigns__BatchTooLarge();
@@ -452,6 +454,7 @@ contract CampaignManagement is CampaignStorage {
         if (_token == address(0)) {
             revert Web3Campaigns__InvalidTokenAddress();
         }
+        _requireContract(_token);
         uint256 len = _ids.length;
         if (len == 0 || len > 100) {
             revert Web3Campaigns__BatchTooLarge();
@@ -498,6 +501,19 @@ contract CampaignManagement is CampaignStorage {
         CampaignStatus s = _campaigns[_campaignId].status;
         if (s != CampaignStatus.Draft && s != CampaignStatus.Open && s != CampaignStatus.Ended) {
             revert Web3Campaigns__CampaignAlreadyEnded();
+        }
+    }
+
+    /// @dev Reject a reward-token address with no deployed code (an EOA, or an address whose contract
+    /// has self-destructed). Catches a fat-fingered/wrong-address configuration at the boundary
+    /// rather than letting it fail opaquely later inside a transfer. Callers must ALSO keep their own
+    /// `== address(0)` check: a zero address trivially has no code, but the dedicated
+    /// InvalidTokenAddress error is the clearer diagnostic for that specific mistake. NOTE: this only
+    /// proves code exists NOW -- it is not a guarantee the address is a well-behaved ERC20/ERC721
+    /// (that trust boundary is unchanged), only that it is not an EOA/empty address.
+    function _requireContract(address _token) internal view {
+        if (_token.code.length == 0) {
+            revert Web3Campaigns__NotAContract();
         }
     }
 

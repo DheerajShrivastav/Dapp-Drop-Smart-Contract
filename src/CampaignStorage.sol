@@ -54,6 +54,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__FeeExceedsAmount();
     error Web3Campaigns__InvalidFeeTreasury();
     error Web3Campaigns__NoFundsReceived();
+    error Web3Campaigns__NotAContract();
+    error Web3Campaigns__TreasuryNotSet();
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();
@@ -257,6 +259,12 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // state to desync across a rotation (see IFeeModule.sol for the full rationale).
     address internal _feeModule;
 
+    // Destination for withdrawETH -- a stored, admin-settable treasury rather than an arbitrary
+    // per-call recipient, so an admin key cannot send contract ETH to an unbounded address (closes
+    // the arbitrary-send-eth surface, see docs/SECURITY_FINDINGS.md #10). address(0) until set;
+    // withdrawETH reverts while unset.
+    address internal _treasury;
+
     // Events (can be defined here or in the main contract)
     event CampaignCreated(
         uint256 indexed campaignId, address indexed host, string name, uint256 startTime, uint256 endTime
@@ -275,6 +283,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event AccountFlagged(address indexed user, uint256 score, address indexed moderator);
     event FundsReceived(address indexed sender, uint256 amount);
     event EtherWithdrawn(address indexed to, uint256 amount);
+    event TreasuryUpdated(address indexed treasury);
 
     event OffChainRewardConfigured(uint256 indexed campaignId, string description);
     event BatchTasksVerified(uint256 indexed campaignId, uint256 count);

@@ -196,6 +196,11 @@ contract CampaignViewFunctions is CampaignStorage {
         return _feeModule;
     }
 
+    /// @notice The configured treasury that withdrawETH sweeps to (address(0) until set).
+    function getTreasury() external view returns (address) {
+        return _treasury;
+    }
+
     // getNFTMerkleRoot / getNFTClaimableAt / isNFTLeafClaimed / isERC721Escrowed /
     // getERC1155Escrowed now live on NFTSettlementModule -- query the module directly (via
     // getCampaignNFTModule below). Web3Campaigns no longer holds this state itself.
