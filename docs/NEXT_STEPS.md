@@ -1,6 +1,6 @@
 # Next Steps — Web3Campaigns v0.3+
 
-> Pick-up list. v0.3 escrow + Merkle settlement, Phase 2 signature verification, the invariant-test hardening pass (incl. a real security fix), `cancelCampaign`, on-chain tiered settlement + per-campaign module pinning, its invariant suite, the Merkle root dispute window, its invariant suite, the protocol fee module, the NFT settlement module extraction, fee-on-transfer ERC20 support, and its invariant coverage are all merged to `dev` (PR #1–#13; VERSION 0.5.0). A hardening sweep (withdrawETH treasury restriction + `.code.length` token checks + multi-leaf NFT proof test) is in progress on `feature/hardening-sweep` (166 tests passing). Ordered roughly by priority.
+> Pick-up list. v0.3 escrow + Merkle settlement, Phase 2 signature verification, the invariant-test hardening pass (incl. a real security fix), `cancelCampaign`, on-chain tiered settlement + per-campaign module pinning, its invariant suite, the Merkle root dispute window, its invariant suite, the protocol fee module, the NFT settlement module extraction, fee-on-transfer ERC20 support, its invariant coverage, and the hardening sweep (withdrawETH treasury restriction + `.code.length` token checks + multi-leaf NFT proof test) are all merged to `dev` (PR #1–#14; VERSION 0.5.0). Sponsored (gasless) claims are in progress on `feature/sponsored-claims` (182 tests passing). Ordered roughly by priority.
 
 ## Hardening / open items (on the current model)
 
@@ -15,10 +15,10 @@
 - [ ] **Reward-configuration invariant coverage** — current invariants focus on the settlement/claim/sweep lifecycle; access-control fuzzing on `configureERC20Reward`/deposits is still open.
 - [x] **`withdrawETH` treasury restriction (low).** Replaced the arbitrary `_to` with a stored, admin-settable `_treasury` (`setTreasury`); `withdrawETH()` now takes no destination. Clears Slither's `arbitrary-send-eth` flag (269 → 268). API-breaking but admin-only/pre-launch. Done in the hardening sweep (`feature/hardening-sweep`).
 - [ ] **Repo-wide `forge fmt`.** Repo does not pass `forge fmt --check` (pre-existing). Do a single formatting pass so CI's `forge fmt --check` goes green — as its own commit to keep diffs reviewable.
-- [ ] **`grantHostRole` is intentionally open.** Revisit when adding the staked/curated hosting model (founder decision to leave open for now).
+- [ ] **`grantHostRole` is intentionally open.** Founder decision (reconfirmed 2026-07-13): stays open through the testing/beta phase; will become chargeable (the staked hosting tier below) after beta ends.
 - [x] **`.code.length` check** on `configureERC20Reward` / NFT deposits to reject EOA/empty token addresses early. New `_requireContract` helper + `Web3Campaigns__NotAContract` error, applied at all three token-address boundaries. Done in the hardening sweep (`feature/hardening-sweep`).
 - [x] **NFT settlement module extraction.** All NFT Merkle-settlement logic + escrow bookkeeping moved out of `Web3Campaigns` into a new satellite `NFTSettlementModule` (mirroring `OnChainRewardModule`/`FeeModule`), reclaiming ~793B of entrypoint headroom (23,829B → 23,036B runtime). `Web3Campaigns` keeps all NFT custody; users call the module directly for `setNFTMerkleRoot`/`claimNFT`/`withdrawUnclaimedERC721`/`withdrawUnclaimedERC1155`. New per-campaign pin (`_campaignNFTModule`) set at **first deposit** (earlier than the reward module's pin-at-mode-adoption), since escrow bookkeeping can precede any root ever being published — see `docs/SECURITY_FINDINGS.md`. Done on `feature/nft-settlement-module`.
-- [ ] **Contract size headroom.** `Web3Campaigns` runtime is 23,499B / 24,576B limit (~1,077B left after the hardening sweep's treasury setter/getter/event/errors + `_requireContract` guard cost ~241B, on top of the fee-on-transfer fix before it). Headroom is now under 1.1KB — the satellite-contract pattern (`OnChainRewardModule`/`FeeModule`/`NFTSettlementModule`) should stay the default for any future feature needing meaningful logic, and even small inline additions like this pass now measurably eat the budget. Watch `forge build --sizes` before every change.
+- [ ] **Contract size headroom.** `Web3Campaigns` runtime is 23,678B / 24,576B limit (~898B left after the sponsored-claims pass's inline `claimERC20For` wrapper cost ~179B, on top of the hardening sweep before it). **Headroom is now under 1KB** — the satellite-contract pattern (`OnChainRewardModule`/`FeeModule`/`NFTSettlementModule`) is effectively mandatory for anything new, and even small inline additions must be size-checked before writing code. Watch `forge build --sizes` before every change.
 
 ## Phase 2 (merged to `dev` via PR #2)
 
@@ -28,10 +28,10 @@
 
 ## Phase 3 (post-PMF)
 
-- [ ] **Sybil gating** — World ID / Gitcoin Passport at claim for high-value campaigns (the `HUMANITY_VERIFICATION` task type is currently unenforced).
-- [ ] **Gasless claims** — ERC-2771 / paymaster so users don't pay gas to claim small rewards.
+- [ ] **Sybil gating via Humanity Protocol** — founder decision: use Humanity Protocol (their off-chain OAuth SDK), automated with no signer involvement. Design agreed: a rotatable `IHumanityModule` satellite exposing `isVerified(address) → bool`, consulted automatically at claim time; behind the interface plugs whatever Humanity Protocol exposes on-chain on the deployment chain (their on-chain credential registry where available; otherwise a registry the backend syncs — to be flagged clearly in docs). Next contract-side PR.
+- [x] **Gasless claims** — done via sponsored-claim entrypoints (`claimERC20For`/`claimNFTFor`/`claimRewardFor`): anyone (in practice the project backend, paying gas) submits a claim on behalf of an allocated account; the reward always goes to the account, never the caller. Deliberately NO meta-transaction framework (ERC-2771 would change `_msgSender()` semantics contract-wide; ERC-4337 needs no contract support and stays available independently). See `docs/SECURITY_FINDINGS.md`. Done on `feature/sponsored-claims`.
 - [ ] **`MAX_PARTICIPANTS_LIMIT` enforcement** and `JOIN_COOLDOWN` (declared constants currently unenforced).
-- [ ] **Staked/open hosting tier** — `selfRegisterAsHost() payable` gated by a refundable stake / creation fee, slashable on abuse (the deliberate version of today's open `grantHostRole`).
+- [ ] **Staked/open hosting tier** — `selfRegisterAsHost() payable` gated by a refundable stake / creation fee, slashable on abuse (the deliberate version of today's open `grantHostRole`). Founder decision: deferred until after the testing/beta phase; open questions before building — stake amount, who adjudicates a slash, where slashed funds go.
 
 ## Process reminders (from CLAUDE.md)
 Before each commit: `forge build` clean · `forge test` green · review the full diff. Toolchain: `export PATH="$HOME/.foundry/bin:$PATH"`. See [[TEST_AND_BUILD]], [[SECURITY_FINDINGS]], [[REWARD_SYSTEM]].
