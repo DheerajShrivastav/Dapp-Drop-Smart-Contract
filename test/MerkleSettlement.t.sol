@@ -236,6 +236,26 @@ contract MerkleSettlementTest is Test {
                           CONFIG / FUNDING
     //////////////////////////////////////////////////////////////*/
 
+    function test_ConfigureERC20Reward_RevertsOnZeroAddress() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidTokenAddress.selector);
+        campaigns.configureERC20Reward(id, address(0));
+        vm.stopPrank();
+    }
+
+    function test_ConfigureERC20Reward_RevertsOnEOA() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.startPrank(host1);
+        uint256 id = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        // A plain EOA (no deployed code) is rejected at configuration time rather than failing
+        // opaquely inside a later transfer.
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotAContract.selector);
+        campaigns.configureERC20Reward(id, vm.addr(0xE0A));
+        vm.stopPrank();
+    }
+
     function test_FundCampaignERC20_RevertsIfNotConfigured() public {
         uint256 startTime = block.timestamp + START_OFFSET;
         vm.startPrank(host1);

@@ -301,16 +301,55 @@ contract CampaignLifecycleTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_WithdrawETH_Success() public {
+        address treasury = vm.addr(99);
+        vm.prank(deployer);
+        campaigns.setTreasury(treasury);
+
         // Send ETH to the contract
         vm.deal(address(this), 1 ether);
         (bool sent,) = address(campaigns).call{value: 1 ether}("");
         assertTrue(sent);
 
-        uint256 balBefore = deployer.balance;
+        uint256 balBefore = treasury.balance;
 
         vm.prank(deployer);
-        campaigns.withdrawETH(payable(deployer));
+        campaigns.withdrawETH();
 
-        assertEq(deployer.balance - balBefore, 1 ether);
+        assertEq(treasury.balance - balBefore, 1 ether);
+    }
+
+    function test_WithdrawETH_RevertsIfTreasuryNotSet() public {
+        vm.deal(address(this), 1 ether);
+        (bool sent,) = address(campaigns).call{value: 1 ether}("");
+        assertTrue(sent);
+
+        vm.prank(deployer);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__TreasuryNotSet.selector);
+        campaigns.withdrawETH();
+    }
+
+    function test_SetTreasury_RevertsOnZeroAddress() public {
+        vm.prank(deployer);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidTokenAddress.selector);
+        campaigns.setTreasury(address(0));
+    }
+
+    function test_SetTreasury_OnlyAdmin() public {
+        vm.prank(participant1);
+        vm.expectRevert();
+        campaigns.setTreasury(vm.addr(99));
+    }
+
+    function test_SetTreasury_StoresAndRotates() public {
+        address t1 = vm.addr(97);
+        address t2 = vm.addr(98);
+
+        vm.prank(deployer);
+        campaigns.setTreasury(t1);
+        assertEq(campaigns.getTreasury(), t1);
+
+        vm.prank(deployer);
+        campaigns.setTreasury(t2);
+        assertEq(campaigns.getTreasury(), t2);
     }
 }
