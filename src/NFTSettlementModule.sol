@@ -3,6 +3,7 @@ pragma solidity ^0.8.31;
 
 import {CampaignStorage} from "./CampaignStorage.sol";
 import {IWeb3CampaignsForNFTModule} from "./IWeb3CampaignsForNFTModule.sol";
+import {INFTSettlementModule} from "./INFTSettlementModule.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @notice Standalone settlement engine for multi-standard (ERC721 + ERC1155) NFT Merkle
@@ -28,7 +29,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 ///   getCampaignNFTModule(id) == address(this) before touching any local state -- defense-in-depth,
 ///   mirroring OnChainRewardModule.claimReward's self-check, so a module that is no longer a
 ///   campaign's authoritative one can never act on stale escrow bookkeeping.
-contract NFTSettlementModule {
+contract NFTSettlementModule is INFTSettlementModule {
     address public immutable WEB3_CAMPAIGNS;
 
     error NFTSettlementModule__NotWeb3Campaigns();

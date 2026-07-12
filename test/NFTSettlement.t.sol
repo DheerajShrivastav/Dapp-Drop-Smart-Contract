@@ -7,6 +7,7 @@ import {CampaignStorage} from "../src/CampaignStorage.sol";
 import {NFTSettlementModule} from "../src/NFTSettlementModule.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 contract MockERC721 is ERC721 {
     constructor() ERC721("Mock721", "M721") {}
@@ -342,6 +343,47 @@ contract NFTSettlementTest is Test {
         vm.prank(host1);
         vm.expectRevert(CampaignStorage.Web3Campaigns__NFTNotEscrowed.selector);
         nftModule.withdrawUnclaimedERC721(id, address(nft721), _ids(1));
+    }
+
+    /// @dev claimNFT/withdrawUnclaimed* moved off Web3Campaigns and lost their direct
+    /// whenNotPaused wrapper -- pause coverage now depends implicitly on every token-moving path
+    /// funneling through Web3Campaigns.executeNFTTransferOut (nonReentrant + whenNotPaused). These
+    /// tests pin that down explicitly so a future change that moves a token without going through
+    /// executeNFTTransferOut can't silently lose pause coverage with nothing to catch it.
+    function test_ClaimNFT_RevertsWhenPaused() public {
+        bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        uint256 id = _setup721(_ids(1), root);
+
+        vm.prank(deployer);
+        campaigns.emergencyPause();
+
+        vm.prank(p1);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), 1, 1, _emptyProof());
+
+        // The revert must unwind the module's own state changes too, not just Web3Campaigns'.
+        assertTrue(nftModule.isERC721Escrowed(id, address(nft721), 1));
+        assertFalse(nftModule.isNFTLeafClaimed(id, root));
+        assertEq(nft721.ownerOf(1), address(campaigns));
+    }
+
+    function test_WithdrawUnclaimedNFT_RevertsWhenPaused() public {
+        bytes32 root = _nftLeaf(p1, 0, address(nft721), 1, 1);
+        uint256 id = _setup721(_ids(1), root);
+
+        vm.prank(host1);
+        campaigns.closeCampaign(id);
+        vm.warp(block.timestamp + GRACE + 1);
+
+        vm.prank(deployer);
+        campaigns.emergencyPause();
+
+        vm.prank(host1);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        nftModule.withdrawUnclaimedERC721(id, address(nft721), _ids(1));
+
+        assertTrue(nftModule.isERC721Escrowed(id, address(nft721), 1));
+        assertEq(nft721.ownerOf(1), address(campaigns));
     }
 
     function test_SetNFTMerkleRoot_RevertsIfNotEnded() public {
