@@ -35,6 +35,7 @@ Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 5-contract composition, deployed entrypoint, roles, `Draft→Open→Ended→Closed(→Cancelled)` lifecycle, claim flow.
 - [REWARD_SYSTEM.md](REWARD_SYSTEM.md) — escrow + Merkle settlement for ERC20 and multi-standard NFT rewards, plus cancellation refund.
 - [TASK_VERIFICATION.md](TASK_VERIFICATION.md) — Phase 2: EIP-712 signed attestations for off-chain task completion, replay/update model, signer rotation.
+- [HUMANITY_GATING.md](HUMANITY_GATING.md) — sybil resistance via Humanity Protocol (off-chain OAuth): enforcement at tree-build/sponsorship/required-task points, backend spec, trust model, deferred `IHumanityModule`.
 - [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) — original findings with current FIXED / OPEN / INTENTIONAL status, plus the invariant-found cross-campaign drain bug.
 - [BRANCHES.md](BRANCHES.md) — branch topology, merged branches, active sponsored-claims branch.
 - [TEST_AND_BUILD.md](TEST_AND_BUILD.md) — toolchain setup, test coverage (unit + invariant suites), how to build/run.
