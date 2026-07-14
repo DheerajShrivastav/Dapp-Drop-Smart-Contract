@@ -26,7 +26,7 @@ Active development on branch **`feature/sponsored-claims`**: gasless UX via perm
 
 The contract is **escrow + verify + Merkle-settle**, plus an on-chain-computed dispute-free alternative for ERC20 tiered rewards. There is no live mid-campaign Merkle claim path. Off-chain rewards remain informational only.
 
-Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **182 tests passing** (16 suites, including 6 stateful-fuzz invariant suites) on `feature/sponsored-claims`. Build clean, `forge fmt --check` clean. Contract size 23,678B runtime (24,576B limit — **~898B headroom, now under 1KB**; the inline `claimERC20For` wrapper cost ~179B, the NFT/reward sponsored variants live in their satellites' budgets).
+Toolchain: Foundry 1.7.1, OZ + forge-std submodules initialized. **183 tests passing** (16 suites, including 6 stateful-fuzz invariant suites) on `feature/sponsored-claims`. Build clean, `forge fmt --check` clean. Contract size 23,678B runtime (24,576B limit — **~898B headroom, now under 1KB**; the inline `claimERC20For` wrapper cost ~179B, the NFT/reward sponsored variants live in their satellites' budgets).
 
 Decisions locked by the founder: **no upgradeability** (immutable, no proxy); **Merkle settlement after campaign end** is the reward claim model (not live mid-campaign); **`grantHostRole` stays open/unguarded** intentionally for now; **signature verification replaces** (not runs alongside) host-tx verification; **single `SIGNER_ROLE`** for now (no N-of-M threshold yet); replay guard = per-task version counter, which doubles as an update/reverification mechanism; **`cancelCampaign` requires zero participants** (no partial-cancel-after-engagement escape hatch).
 

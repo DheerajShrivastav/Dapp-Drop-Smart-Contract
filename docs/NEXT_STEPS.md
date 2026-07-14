@@ -1,6 +1,6 @@
 # Next Steps — Web3Campaigns v0.3+
 
-> Pick-up list. v0.3 escrow + Merkle settlement, Phase 2 signature verification, the invariant-test hardening pass (incl. a real security fix), `cancelCampaign`, on-chain tiered settlement + per-campaign module pinning, its invariant suite, the Merkle root dispute window, its invariant suite, the protocol fee module, the NFT settlement module extraction, fee-on-transfer ERC20 support, its invariant coverage, and the hardening sweep (withdrawETH treasury restriction + `.code.length` token checks + multi-leaf NFT proof test) are all merged to `dev` (PR #1–#14; VERSION 0.5.0). Sponsored (gasless) claims are in progress on `feature/sponsored-claims` (182 tests passing). Ordered roughly by priority.
+> Pick-up list. v0.3 escrow + Merkle settlement, Phase 2 signature verification, the invariant-test hardening pass (incl. a real security fix), `cancelCampaign`, on-chain tiered settlement + per-campaign module pinning, its invariant suite, the Merkle root dispute window, its invariant suite, the protocol fee module, the NFT settlement module extraction, fee-on-transfer ERC20 support, its invariant coverage, and the hardening sweep (withdrawETH treasury restriction + `.code.length` token checks + multi-leaf NFT proof test) are all merged to `dev` (PR #1–#14; VERSION 0.5.0). Sponsored (gasless) claims are in progress on `feature/sponsored-claims` (183 tests passing). Ordered roughly by priority.
 
 ## Hardening / open items (on the current model)
 
