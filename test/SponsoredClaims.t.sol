@@ -340,4 +340,20 @@ contract SponsoredClaimsTest is Test {
         vm.expectRevert(CampaignStorage.Web3Campaigns__ZeroAddress.selector);
         rewardModule.claimRewardFor(id, address(0));
     }
+
+    function test_ClaimRewardFor_RevertsWhenPaused() public {
+        uint256 id = _endedRankTieredCampaign();
+
+        vm.prank(deployer);
+        campaigns.emergencyPause();
+
+        vm.prank(sponsor);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        rewardModule.claimRewardFor(id, p1);
+
+        // The revert must unwind the module's own state, not just Web3Campaigns'.
+        (,,,, bool claimed) = rewardModule.getOnChainRewardStatus(id, p1);
+        assertFalse(claimed);
+        assertEq(token.balanceOf(p1), 0);
+    }
 }
