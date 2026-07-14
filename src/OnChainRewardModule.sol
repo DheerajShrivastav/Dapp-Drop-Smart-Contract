@@ -193,7 +193,29 @@ contract OnChainRewardModule is IOnChainRewardModule {
      * @param _campaignId Campaign ID
      */
     function claimReward(uint256 _campaignId) external {
-        if (_onChainRewardClaimed[_campaignId][msg.sender]) {
+        _claimReward(_campaignId, msg.sender);
+    }
+
+    /**
+     * @notice Submit an on-chain-reward claim ON BEHALF OF a participant (sponsored / gasless
+     *         claim). Payment ALWAYS goes to `_participant` -- never to the caller.
+     * @dev Deliberately permissionless, mirroring Web3Campaigns.claimERC20For: the payout amount is
+     *      computed purely from `_participant`'s own on-chain rank/score state, and payOnChainReward
+     *      pays `_participant` directly, so a third-party caller can only deliver a participant's
+     *      own reward to the participant's own wallet. Lets the project backend pay gas for users
+     *      with no meta-transaction framework.
+     */
+    function claimRewardFor(uint256 _campaignId, address _participant) external {
+        if (_participant == address(0)) {
+            revert CampaignStorage.Web3Campaigns__ZeroAddress();
+        }
+        _claimReward(_campaignId, _participant);
+    }
+
+    /// @dev Shared claim body for claimReward (participant = msg.sender) and claimRewardFor
+    /// (sponsored). All checks/effects/payout run against `_participant`.
+    function _claimReward(uint256 _campaignId, address _participant) internal {
+        if (_onChainRewardClaimed[_campaignId][_participant]) {
             revert CampaignStorage.Web3Campaigns__AlreadyClaimedSettlement();
         }
 
@@ -222,13 +244,13 @@ contract OnChainRewardModule is IOnChainRewardModule {
         uint256 amount;
         uint256 rankOrScore;
         if (mode == CampaignStorage.ERC20SettlementMode.RANK_TIERED) {
-            if (!_currentlyQualified[_campaignId][msg.sender]) {
+            if (!_currentlyQualified[_campaignId][_participant]) {
                 revert CampaignStorage.Web3Campaigns__NotFullyCompleted();
             }
-            rankOrScore = _completionRank[_campaignId][msg.sender];
+            rankOrScore = _completionRank[_campaignId][_participant];
             amount = OnChainRewardLib.matchRankTier(_rankTiers[_campaignId], rankOrScore);
         } else {
-            rankOrScore = _participantScore[_campaignId][msg.sender];
+            rankOrScore = _participantScore[_campaignId][_participant];
             amount = OnChainRewardLib.matchScoreTier(_scoreTiers[_campaignId], rankOrScore);
         }
 
@@ -237,9 +259,9 @@ contract OnChainRewardModule is IOnChainRewardModule {
         }
 
         // Effects (CEI) before the cross-contract interaction that actually moves funds.
-        _onChainRewardClaimed[_campaignId][msg.sender] = true;
+        _onChainRewardClaimed[_campaignId][_participant] = true;
 
-        IWeb3CampaignsForModule(WEB3_CAMPAIGNS).payOnChainReward(_campaignId, msg.sender, amount, rankOrScore);
+        IWeb3CampaignsForModule(WEB3_CAMPAIGNS).payOnChainReward(_campaignId, _participant, amount, rankOrScore);
     }
 
     /// @notice A participant's full on-chain-reward status for a campaign in one call: the

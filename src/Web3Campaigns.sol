@@ -217,6 +217,16 @@ contract Web3Campaigns is
         super.claimERC20(_campaignId, _amount, _proof);
     }
 
+    // Secure wrapper for ParticipantManagement.claimERC20For (sponsored/gasless claims)
+    function claimERC20For(uint256 _campaignId, address _account, uint256 _amount, bytes32[] calldata _proof)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+    {
+        super.claimERC20For(_campaignId, _account, _amount, _proof);
+    }
+
     // Secure wrapper for CampaignManagement.withdrawUnclaimedERC20
     function withdrawUnclaimedERC20(uint256 _campaignId) public override whenNotPaused nonReentrant {
         super.withdrawUnclaimedERC20(_campaignId);

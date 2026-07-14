@@ -174,6 +174,45 @@ contract NFTSettlementModule is INFTSettlementModule {
         uint256 _amount,
         bytes32[] calldata _proof
     ) external {
+        _claimNFT(_campaignId, msg.sender, _standard, _token, _tokenId, _amount, _proof);
+    }
+
+    /**
+     * @notice Submit an NFT settlement claim ON BEHALF OF an allocated account (sponsored /
+     *         gasless claim). The NFT is ALWAYS delivered to `_account` -- never to the caller.
+     * @dev Deliberately permissionless, mirroring Web3Campaigns.claimERC20For: the Merkle proof
+     *      only verifies against a leaf committing to `_account`, so a third-party caller can only
+     *      deliver `_account`'s own allocation to `_account`'s own wallet. Lets the project backend
+     *      pay gas for users with no meta-transaction framework. NOTE: if `_account` is a contract,
+     *      ERC721/1155 safeTransferFrom's receiver check still applies -- a non-receiver contract
+     *      reverts the claim, exactly as it would for a self-submitted one.
+     */
+    function claimNFTFor(
+        uint256 _campaignId,
+        address _account,
+        CampaignStorage.NFTStandard _standard,
+        address _token,
+        uint256 _tokenId,
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) external {
+        if (_account == address(0)) {
+            revert CampaignStorage.Web3Campaigns__ZeroAddress();
+        }
+        _claimNFT(_campaignId, _account, _standard, _token, _tokenId, _amount, _proof);
+    }
+
+    /// @dev Shared claim body for claimNFT (account = msg.sender) and claimNFTFor (sponsored). All
+    /// checks/effects/delivery run against `_account`.
+    function _claimNFT(
+        uint256 _campaignId,
+        address _account,
+        CampaignStorage.NFTStandard _standard,
+        address _token,
+        uint256 _tokenId,
+        uint256 _amount,
+        bytes32[] calldata _proof
+    ) internal {
         _requireAuthoritative(_campaignId);
 
         (, CampaignStorage.CampaignStatus status) =
@@ -195,7 +234,7 @@ contract NFTSettlementModule is INFTSettlementModule {
         }
 
         bytes32 leaf =
-            keccak256(bytes.concat(keccak256(abi.encode(msg.sender, uint8(_standard), _token, _tokenId, _amount))));
+            keccak256(bytes.concat(keccak256(abi.encode(_account, uint8(_standard), _token, _tokenId, _amount))));
         if (_nftLeafClaimed[_campaignId][leaf]) {
             revert CampaignStorage.Web3Campaigns__AlreadyClaimedSettlement();
         }
@@ -221,9 +260,9 @@ contract NFTSettlementModule is INFTSettlementModule {
         }
 
         IWeb3CampaignsForNFTModule(WEB3_CAMPAIGNS)
-            .executeNFTTransferOut(_campaignId, _standard, _token, _tokenId, _amount, msg.sender);
+            .executeNFTTransferOut(_campaignId, _standard, _token, _tokenId, _amount, _account);
 
-        emit NFTRewardClaimed(_campaignId, msg.sender, _standard, _token, _tokenId, _amount);
+        emit NFTRewardClaimed(_campaignId, _account, _standard, _token, _tokenId, _amount);
     }
 
     // --- Host sweep of unclaimed NFTs ---

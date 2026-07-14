@@ -319,6 +319,37 @@ contract ParticipantManagement is CampaignStorage {
      * @param _proof Merkle proof for the (msg.sender, _amount) leaf
      */
     function claimERC20(uint256 _campaignId, uint256 _amount, bytes32[] calldata _proof) public virtual {
+        _claimERC20(_campaignId, msg.sender, _amount, _proof);
+    }
+
+    /**
+     * @notice Submit an ERC20 settlement claim ON BEHALF OF an allocated account (sponsored /
+     *         gasless claim). Tokens are ALWAYS paid to `_account` -- never to the caller.
+     * @dev Deliberately permissionless: the Merkle proof only verifies against a leaf committing to
+     *      `_account`, so the worst a third-party caller can do is deliver `_account`'s own
+     *      allocation to `_account`'s own wallet earlier than they might have chosen -- there is no
+     *      path to redirect funds. This is what makes gasless UX possible without any
+     *      meta-transaction framework: the project's backend can submit claims for users and pay
+     *      the gas itself.
+     * @param _campaignId Campaign ID
+     * @param _account The allocated account committed in the Merkle leaf (also the payout recipient)
+     * @param _amount The exact allocation for `_account` as committed in the tree
+     * @param _proof Merkle proof for the (_account, _amount) leaf
+     */
+    function claimERC20For(uint256 _campaignId, address _account, uint256 _amount, bytes32[] calldata _proof)
+        public
+        virtual
+    {
+        if (_account == address(0)) {
+            revert Web3Campaigns__ZeroAddress();
+        }
+        _claimERC20(_campaignId, _account, _amount, _proof);
+    }
+
+    /// @dev Shared claim body for claimERC20 (account = msg.sender) and claimERC20For (sponsored).
+    /// All checks/effects/payout run against `_account`, so a sponsored claim is byte-for-byte the
+    /// same settlement the account itself would have executed.
+    function _claimERC20(uint256 _campaignId, address _account, uint256 _amount, bytes32[] calldata _proof) internal {
         Campaign storage campaign = _campaigns[_campaignId];
 
         if (campaign.id == 0) {
@@ -355,27 +386,27 @@ contract ParticipantManagement is CampaignStorage {
         if (block.timestamp < claimableAt) {
             revert Web3Campaigns__RootDisputeWindowActive(_campaignId, claimableAt);
         }
-        if (_erc20SettlementClaimed[_campaignId][msg.sender]) {
+        if (_erc20SettlementClaimed[_campaignId][_account]) {
             revert Web3Campaigns__AlreadyClaimedSettlement();
         }
 
         // OZ StandardMerkleTree leaf: double-hash of the ABI-encoded tuple.
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, _amount))));
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(_account, _amount))));
         if (!MerkleProof.verify(_proof, root, leaf)) {
             revert Web3Campaigns__InvalidMerkleProof();
         }
 
         // Effects (CEI): mark claimed and account the distribution before transferring.
-        _erc20SettlementClaimed[_campaignId][msg.sender] = true;
+        _erc20SettlementClaimed[_campaignId][_account] = true;
         uint256 newDistributed = _erc20Distributed[_campaignId] + _amount;
         if (newDistributed > _erc20Escrowed[_campaignId]) {
             revert Web3Campaigns__InsufficientEscrow();
         }
         _erc20Distributed[_campaignId] = newDistributed;
 
-        IERC20(_erc20RewardToken[_campaignId]).safeTransfer(msg.sender, _amount);
+        IERC20(_erc20RewardToken[_campaignId]).safeTransfer(_account, _amount);
 
-        emit ERC20RewardClaimed(_campaignId, msg.sender, _amount);
+        emit ERC20RewardClaimed(_campaignId, _account, _amount);
     }
 
     /**
