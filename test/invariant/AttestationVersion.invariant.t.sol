@@ -68,4 +68,15 @@ contract AttestationVersionInvariant is StdInvariant, Test {
             "completion state diverged from last accepted attestation"
         );
     }
+
+    /// @notice None of the four adversarial attestation attempts (stale/skip-ahead/non-signer/
+    /// expired) was ever unexpectedly accepted. Largely redundant with the two invariants above
+    /// (any such acceptance would also desync the ghost-model cross-checks), but explicit and
+    /// direct -- see AttestationVersionHandler's contract-level docs for why the handler no longer
+    /// reverts on this branch (a prior revert-based version of this check silently passed even
+    /// when a real bypass occurred, since fail_on_revert=false discards the revert and everything
+    /// done in that same call, including the bypassed call's own state mutation).
+    function invariant_noUnexpectedAcceptances() public view {
+        assertEq(handler.ghost_unexpectedAcceptances(), 0, "an adversarial attestation was unexpectedly accepted");
+    }
 }

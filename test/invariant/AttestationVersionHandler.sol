@@ -10,6 +10,28 @@ import {CampaignStorage} from "../../src/CampaignStorage.sol";
 ///         skip-aheads, and non-signer signatures interleaved with legitimate next-version
 ///         attestations, and tracks a ghost "expected version" that should track the on-chain
 ///         counter exactly regardless of how many invalid attempts are interleaved.
+///
+/// The four attacker functions below do NOT revert on the unexpected-success branch (they used to,
+/// via `revert("...")` -- removed after a negative control proved that pattern doesn't work: any
+/// revert from a handler call is silently discarded under this project's `fail_on_revert = false`
+/// profile, which unwinds EVERYTHING done in that same call, including the exploited contract's own
+/// state mutation, not just a ghost-counter write meant to flag it. Concretely: with the loud
+/// revert, disabling the contract's `hasRole(SIGNER_ROLE, signer)` check produced ZERO failures on
+/// this suite, even though `invariant_versionMatchesGhostModel`/
+/// `invariant_completionMatchesLastAcceptedAttestation` are independent live-state cross-checks that
+/// don't reference these attacker functions' own bookkeeping at all -- because the bypassed call's
+/// on-chain mutation never survived to be observed. See docs/SECURITY_FINDINGS.md. Now: the call is
+/// simply left to return normally on unexpected success, so the mutation persists and the two
+/// pre-existing invariants above catch the divergence on their own; `ghost_unexpectedAcceptances` is
+/// an explicit, redundant-but-clearer counter for the same thing.
+///
+/// `attestReplayStaleVersion`/`attestSkipAheadVersion` are structurally unable to succeed regardless
+/// of this fix: `verifyTaskCompletionWithSignature` takes no caller-supplied version at all -- the
+/// contract always computes `nextVersion = current + 1` itself and embeds THAT in the digest it
+/// recomputes, so a signature built for any other version can never recover to a valid signer. They
+/// are kept (converted to the same non-reverting shape for consistency) as a regression check
+/// against a hypothetical future refactor that accepted an explicit version parameter, not because
+/// they currently exercise a reachable bypass.
 contract AttestationVersionHandler is Test {
     Web3Campaigns public campaigns;
     address public participant = address(0xFEED);
@@ -28,6 +50,7 @@ contract AttestationVersionHandler is Test {
     bool public ghost_lastCompleted;
     uint256 public ghost_acceptedCount;
     uint256 public ghost_rejectedCount;
+    uint256 public ghost_unexpectedAcceptances; // must stay 0 -- a nonzero value is a live security bug
 
     constructor(Web3Campaigns _campaigns, uint256 _campaignId) {
         campaigns = _campaigns;
@@ -77,7 +100,7 @@ contract AttestationVersionHandler is Test {
         bytes memory sig = _sign(SIGNER_PK, completed, staleVersion, deadline);
 
         try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
-            revert("attestReplayStaleVersion: stale version was incorrectly accepted");
+            ghost_unexpectedAcceptances++;
         } catch {
             ghost_rejectedCount++;
         }
@@ -90,7 +113,7 @@ contract AttestationVersionHandler is Test {
         bytes memory sig = _sign(SIGNER_PK, completed, futureVersion, deadline);
 
         try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
-            revert("attestSkipAheadVersion: future version was incorrectly accepted");
+            ghost_unexpectedAcceptances++;
         } catch {
             ghost_rejectedCount++;
         }
@@ -104,7 +127,7 @@ contract AttestationVersionHandler is Test {
         bytes memory sig = _sign(NON_SIGNER_PK, completed, nextVersion, deadline);
 
         try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
-            revert("attestNonSigner: non-signer signature was incorrectly accepted");
+            ghost_unexpectedAcceptances++;
         } catch {
             ghost_rejectedCount++;
         }
@@ -118,7 +141,7 @@ contract AttestationVersionHandler is Test {
         bytes memory sig = _sign(SIGNER_PK, completed, nextVersion, deadline);
 
         try campaigns.verifyTaskCompletionWithSignature(campaignId, participant, 0, completed, deadline, sig) {
-            revert("attestExpiredDeadline: expired deadline was incorrectly accepted");
+            ghost_unexpectedAcceptances++;
         } catch {
             ghost_rejectedCount++;
         }
