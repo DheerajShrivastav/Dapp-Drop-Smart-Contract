@@ -20,13 +20,21 @@ import {MockERC721} from "../NFTSettlement.t.sol";
 /// invariant contract.
 ///
 /// attemptERC20Claim/attemptNFTClaim predict, from the ghost, whether a claim MUST succeed or MUST
-/// revert RootDisputeWindowActive, and assert the actual outcome matches via try/catch with a loud
-/// revert on the wrong branch -- fail_on_revert=false would otherwise silently discard a violation
-/// in EITHER direction (a should-succeed claim wrongly reverting is just as invisible as a
-/// should-revert claim wrongly succeeding), so both are checked explicitly rather than relying on
-/// ghost-vs-reality accounting alone (see TEST_AND_BUILD.md Known Issues re: vm.expectRevert
-/// fragility -- try/catch with a loud revert on the unexpected branch is this project's established
-/// pattern, from AttestationVersionHandler).
+/// revert RootDisputeWindowActive, and check the actual outcome via try/catch against ghost
+/// counters -- NOT a loud revert("...") on the unexpected branch, despite that having been this
+/// project's previously-documented pattern (see TEST_AND_BUILD.md Known Issues re: vm.expectRevert
+/// fragility, which recommended it). A negative control proved that recommendation wrong: this
+/// suite has NO independent cross-check for "a claim never succeeds inside the dispute window" (the
+/// two invariant_* functions below only check the claimableAt rearm-timing rule, not that claims
+/// actually respect it) -- so if the loud revert doesn't work, NOTHING catches a bypass. Verified
+/// directly: disabling either dispute-window check in src/ (ParticipantManagement.sol's or
+/// NFTSettlementModule.sol's) produced ZERO test failures with the old loud-revert version of this
+/// handler. The exploited claim's own fund movement was silently erased along with the ghost write
+/// meant to flag it, since fail_on_revert=false discards ANY revert from a handler call -- rolling
+/// back everything done in that same call, deliberate or not. Fixed: record the outcome in a ghost
+/// counter and return normally; assert the counters via assertEq inside RootDisputeWindow.invariant.t.sol's
+/// invariant_* functions instead, which fail through forge-std's non-reverting mechanism. Re-ran the
+/// same negative controls against this version: both invariants (ERC20 and NFT) now correctly fail.
 contract RootDisputeWindowHandler is Test {
     Web3Campaigns public campaigns;
     NFTSettlementModule public nftModule;
@@ -54,6 +62,16 @@ contract RootDisputeWindowHandler is Test {
     uint256 public ghost_erc20RevertCount;
     uint256 public ghost_nftSuccessCount;
     uint256 public ghost_nftRevertCount;
+
+    // The following must all stay 0 -- a nonzero value is a live security bug (a claim inside the
+    // dispute window unexpectedly succeeded, a claim after it unexpectedly reverted, or a rejection
+    // fired for the wrong reason).
+    uint256 public ghost_erc20UnexpectedRevert;
+    uint256 public ghost_erc20UnexpectedSuccess;
+    uint256 public ghost_erc20WrongRevertReason;
+    uint256 public ghost_nftUnexpectedRevert;
+    uint256 public ghost_nftUnexpectedSuccess;
+    uint256 public ghost_nftWrongRevertReason;
 
     constructor(Web3Campaigns _campaigns, NFTSettlementModule _nftModule, ERC20Mock _token, MockERC721 _nft721) {
         campaigns = _campaigns;
@@ -143,17 +161,19 @@ contract RootDisputeWindowHandler is Test {
                 erc20Claimed[id] = true;
                 ghost_erc20SuccessCount++;
             } catch {
-                revert("attemptERC20Claim: expected success but reverted at/after claimableAt");
+                ghost_erc20UnexpectedRevert++;
             }
         } else {
             vm.prank(participant);
             try campaigns.claimERC20(id, amt, proof) {
-                revert("attemptERC20Claim: expected RootDisputeWindowActive but succeeded before claimableAt");
+                erc20Claimed[id] = true;
+                ghost_erc20UnexpectedSuccess++;
             } catch (bytes memory reason) {
                 if (bytes4(reason) != CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector) {
-                    revert("attemptERC20Claim: reverted for the wrong reason before claimableAt");
+                    ghost_erc20WrongRevertReason++;
+                } else {
+                    ghost_erc20RevertCount++;
                 }
-                ghost_erc20RevertCount++;
             }
         }
     }
@@ -215,17 +235,19 @@ contract RootDisputeWindowHandler is Test {
                 nftClaimed[id] = true;
                 ghost_nftSuccessCount++;
             } catch {
-                revert("attemptNFTClaim: expected success but reverted at/after claimableAt");
+                ghost_nftUnexpectedRevert++;
             }
         } else {
             vm.prank(participant);
             try nftModule.claimNFT(id, CampaignStorage.NFTStandard.ERC721, address(nft721), tokenId, 1, proof) {
-                revert("attemptNFTClaim: expected RootDisputeWindowActive but succeeded before claimableAt");
+                nftClaimed[id] = true;
+                ghost_nftUnexpectedSuccess++;
             } catch (bytes memory reason) {
                 if (bytes4(reason) != CampaignStorage.Web3Campaigns__RootDisputeWindowActive.selector) {
-                    revert("attemptNFTClaim: reverted for the wrong reason before claimableAt");
+                    ghost_nftWrongRevertReason++;
+                } else {
+                    ghost_nftRevertCount++;
                 }
-                ghost_nftRevertCount++;
             }
         }
     }

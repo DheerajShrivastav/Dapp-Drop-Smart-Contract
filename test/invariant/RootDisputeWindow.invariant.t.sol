@@ -81,6 +81,23 @@ contract RootDisputeWindowInvariant is StdInvariant, Test {
         }
     }
 
+    /// @notice The actual property this suite exists to check: no claim (ERC20 or NFT) ever
+    /// succeeded before its claimableAt timestamp, no claim expected to succeed unexpectedly
+    /// reverted, and no rejection fired for a reason other than RootDisputeWindowActive. Unlike the
+    /// two rearm-rule invariants above, NOTHING else in this suite would catch a violation of this
+    /// property -- confirmed via negative control (see RootDisputeWindowHandler's contract-level
+    /// docs): a prior revert-based version of this check silently passed even when a claim
+    /// genuinely succeeded inside the dispute window, since fail_on_revert=false discards the
+    /// revert along with the exploited claim's own fund movement, not just a ghost-counter write.
+    function invariant_NoDisputeWindowViolations() public view {
+        assertEq(handler.ghost_erc20UnexpectedSuccess(), 0, "an ERC20 claim succeeded inside the dispute window");
+        assertEq(handler.ghost_erc20UnexpectedRevert(), 0, "an ERC20 claim expected to succeed instead reverted");
+        assertEq(handler.ghost_erc20WrongRevertReason(), 0, "an ERC20 claim rejection fired for the wrong reason");
+        assertEq(handler.ghost_nftUnexpectedSuccess(), 0, "an NFT claim succeeded inside the dispute window");
+        assertEq(handler.ghost_nftUnexpectedRevert(), 0, "an NFT claim expected to succeed instead reverted");
+        assertEq(handler.ghost_nftWrongRevertReason(), 0, "an NFT claim rejection fired for the wrong reason");
+    }
+
     // NOTE: a "did both outcomes get exercised" liveness check was deliberately NOT added as an
     // invariant_* function here. Foundry evaluates every invariant_* once immediately after setUp,
     // before any fuzzed call has run (runs=0, calls=0) -- a ghost counter is unconditionally zero at
