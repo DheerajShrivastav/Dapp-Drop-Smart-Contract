@@ -56,6 +56,8 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__NoFundsReceived();
     error Web3Campaigns__NotAContract();
     error Web3Campaigns__TreasuryNotSet();
+    error Web3Campaigns__InvalidParticipantLimit();
+    error Web3Campaigns__ParticipantLimitReached();
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();
@@ -79,9 +81,11 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
     uint256 public constant MAX_CAMPAIGN_DURATION = 365 days;
+    // MAX_PARTICIPANTS_LIMIT is a sanity ceiling on the per-campaign cap a host can set via
+    // setMaxParticipants (see CampaignManagement.sol), not itself an enforced limit -- a campaign
+    // with no cap set (0) is unlimited, capped only by this ceiling.
     uint256 public constant MAX_PARTICIPANTS_LIMIT = 100_000;
     uint256 public constant RATE_LIMIT_COOLDOWN = 5 minutes;
-    uint256 public constant JOIN_COOLDOWN = 1 minutes;
     uint256 public constant MAX_SUSPICIOUS_SCORE = 100;
     uint256 public constant MAX_BATCH_SIZE = 50;
     // Grace window after a campaign is Closed before the host may sweep unclaimed escrow
@@ -202,6 +206,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     mapping(address => mapping(uint256 => bool)) internal _participantClaimedReward;
     mapping(address => uint256[]) internal _hostCampaigns;
     mapping(address => mapping(uint256 => bool)) internal _hasParticipated;
+    mapping(uint256 => uint256) internal _maxParticipants; // campaignId => cap (0 = unlimited)
 
     // Security tracking mappings
     mapping(address => uint256) internal _lastActivityTime;
@@ -284,6 +289,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event FundsReceived(address indexed sender, uint256 amount);
     event EtherWithdrawn(address indexed to, uint256 amount);
     event TreasuryUpdated(address indexed treasury);
+    event MaxParticipantsUpdated(uint256 indexed campaignId, uint256 maxParticipants);
 
     event OffChainRewardConfigured(uint256 indexed campaignId, string description);
     event BatchTasksVerified(uint256 indexed campaignId, uint256 count);

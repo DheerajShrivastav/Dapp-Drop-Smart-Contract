@@ -107,6 +107,10 @@ contract ParticipantManagement is CampaignStorage {
 
         // Accurately track unique participants
         if (!_hasParticipated[msg.sender][_campaignId]) {
+            uint256 cap = _maxParticipants[_campaignId];
+            if (cap != 0 && campaign.totalParticipants >= cap) {
+                revert Web3Campaigns__ParticipantLimitReached();
+            }
             _hasParticipated[msg.sender][_campaignId] = true;
             campaign.totalParticipants++; // Increment only for the first task completed by this participant in this campaign
         }
@@ -203,6 +207,10 @@ contract ParticipantManagement is CampaignStorage {
         // totalParticipants tracks lifetime participation, not current completion status, so it
         // is only ever incremented on a participant's first-ever completed attestation/task.
         if (_completed && !wasCompleted && !_hasParticipated[_participant][_campaignId]) {
+            uint256 cap = _maxParticipants[_campaignId];
+            if (cap != 0 && campaign.totalParticipants >= cap) {
+                revert Web3Campaigns__ParticipantLimitReached();
+            }
             _hasParticipated[_participant][_campaignId] = true;
             campaign.totalParticipants++;
         }
