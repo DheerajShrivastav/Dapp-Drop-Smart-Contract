@@ -80,4 +80,4 @@ Off-chain tasks (social follows, Discord joins, `ONCHAIN_TX`) are verified via E
 
 ## Conventions
 
-Uses OZ `AccessControl` (not Ownable), `EIP712`, `SafeERC20`, `ReentrancyGuard`, `Pausable`. Custom errors, events on state changes. Tasks capped (20), batch ops capped (`MAX_BATCH_SIZE = 50`, NFT deposits ≤ 100/call). Reward mechanics: see [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
+Uses OZ `AccessControl` (not Ownable), `EIP712`, `SafeERC20`, `ReentrancyGuard`, `Pausable`. Custom errors, events on state changes. Tasks capped (20), batch ops capped (`MAX_BATCH_SIZE = 50`, NFT deposits ≤ 100/call). Participants per campaign are capped only if the host opts in via `setMaxParticipants` (0 = unlimited, the default; hard-capped at `MAX_PARTICIPANTS_LIMIT` = 100,000). Reward mechanics: see [REWARD_SYSTEM.md](REWARD_SYSTEM.md).
