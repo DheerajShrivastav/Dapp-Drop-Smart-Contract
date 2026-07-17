@@ -201,6 +201,11 @@ contract CampaignViewFunctions is CampaignStorage {
         return _treasury;
     }
 
+    /// @notice A campaign's participant cap (0 = unlimited, the default).
+    function getMaxParticipants(uint256 _campaignId) external view returns (uint256) {
+        return _maxParticipants[_campaignId];
+    }
+
     // getNFTMerkleRoot / getNFTClaimableAt / isNFTLeafClaimed / isERC721Escrowed /
     // getERC1155Escrowed now live on NFTSettlementModule -- query the module directly (via
     // getCampaignNFTModule below). Web3Campaigns no longer holds this state itself.

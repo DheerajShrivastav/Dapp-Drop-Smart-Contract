@@ -216,6 +216,30 @@ contract CampaignManagement is CampaignStorage {
         emit ERC20RewardConfigured(_campaignId, _tokenAddress);
     }
 
+    /**
+     * @notice Set (or clear) a cap on this campaign's total participant count.
+     * @dev Draft only. 0 means unlimited (the default -- a campaign that never calls this is
+     *      uncapped). `_maxParticipants` above MAX_PARTICIPANTS_LIMIT is rejected as a sanity
+     *      bound, not a policy choice. Enforced in ParticipantManagement's completeTask/
+     *      verifyTaskCompletionWithSignature: a wallet's first-ever completion on this campaign
+     *      reverts ParticipantLimitReached once totalParticipants has reached the cap. Does not
+     *      affect participants already counted -- lowering the cap below the current
+     *      totalParticipants simply blocks any further new participants, it never removes existing
+     *      ones.
+     * @param _campaignId Campaign ID
+     * @param _cap The new cap (0 = unlimited), must be <= MAX_PARTICIPANTS_LIMIT
+     */
+    function setMaxParticipants(uint256 _campaignId, uint256 _cap) external onlyHost(_campaignId) {
+        if (_campaigns[_campaignId].status != CampaignStatus.Draft) {
+            revert Web3Campaigns__CampaignAlreadyStarted();
+        }
+        if (_cap > MAX_PARTICIPANTS_LIMIT) {
+            revert Web3Campaigns__InvalidParticipantLimit();
+        }
+        _maxParticipants[_campaignId] = _cap;
+        emit MaxParticipantsUpdated(_campaignId, _cap);
+    }
+
     /// @dev Commits a campaign to an ERC20 settlement mode (MERKLE / RANK_TIERED / SCORE_TIERED).
     /// A campaign may only ever commit to one mode: the first configuration call after
     /// creation sets it from UNSET, and re-configuring the SAME mode while still Draft is allowed

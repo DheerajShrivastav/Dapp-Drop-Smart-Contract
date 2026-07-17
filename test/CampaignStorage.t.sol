@@ -297,6 +297,144 @@ contract CampaignLifecycleTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
+                        MAX PARTICIPANTS LIMIT
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Create -> SOCIAL_FOLLOW task -> open. Returns the campaign id.
+    function _openCampaignWithTask() internal returns (uint256 campaignId) {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+
+        vm.prank(host1);
+        campaignId = campaigns.createCampaign("C", startTime, endTime);
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(campaignId, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Follow us", "", false);
+    }
+
+    function test_SetMaxParticipants_Success() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+
+        vm.prank(host1);
+        campaigns.setMaxParticipants(campaignId, 5);
+
+        assertEq(campaigns.getMaxParticipants(campaignId), 5);
+    }
+
+    function test_SetMaxParticipants_ZeroMeansUnlimitedAndIsTheDefault() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+
+        // Never called -> defaults to 0 (unlimited).
+        assertEq(campaigns.getMaxParticipants(campaignId), 0);
+
+        vm.startPrank(host1);
+        campaigns.setMaxParticipants(campaignId, 5);
+        campaigns.setMaxParticipants(campaignId, 0); // clears it back to unlimited
+        vm.stopPrank();
+
+        assertEq(campaigns.getMaxParticipants(campaignId), 0);
+    }
+
+    function test_SetMaxParticipants_RevertsIfNotHost() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CallerIsNotHost.selector);
+        campaigns.setMaxParticipants(campaignId, 5);
+    }
+
+    function test_SetMaxParticipants_RevertsIfNotDraft() public {
+        uint256 campaignId = _openCampaignWithTask();
+        uint256 startTime = campaigns.getCampaign(campaignId).startTime;
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        vm.prank(host1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignAlreadyStarted.selector);
+        campaigns.setMaxParticipants(campaignId, 5);
+    }
+
+    function test_SetMaxParticipants_RevertsIfAboveGlobalCeiling() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        uint256 tooHigh = campaigns.MAX_PARTICIPANTS_LIMIT() + 1;
+
+        vm.prank(host1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidParticipantLimit.selector);
+        campaigns.setMaxParticipants(campaignId, tooHigh);
+    }
+
+    function test_CompleteTask_RevertsOncePerCampaignParticipantLimitReached() public {
+        uint256 campaignId = _openCampaignWithTask();
+        vm.prank(host1);
+        campaigns.setMaxParticipants(campaignId, 1);
+
+        uint256 startTime = campaigns.getCampaign(campaignId).startTime;
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        vm.prank(participant1);
+        campaigns.completeTask(campaignId, 0);
+        assertEq(campaigns.getCampaign(campaignId).totalParticipants, 1);
+
+        vm.prank(participant2);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__ParticipantLimitReached.selector);
+        campaigns.completeTask(campaignId, 0);
+    }
+
+    /// @dev The cap blocks NEW participants only -- a wallet already counted can complete further
+    /// tasks in the same campaign without being blocked by its own earlier participation.
+    function test_CompleteTask_CapDoesNotBlockAnAlreadyCountedParticipant() public {
+        uint256 campaignId = _openCampaignWithTask();
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(campaignId, CampaignStorage.TaskType.SOCIAL_LIKE, "Like our post", "", false);
+        vm.prank(host1);
+        campaigns.setMaxParticipants(campaignId, 1);
+
+        uint256 startTime = campaigns.getCampaign(campaignId).startTime;
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        vm.prank(participant1);
+        campaigns.completeTask(campaignId, 0);
+        vm.warp(block.timestamp + 31 seconds); // completeTask's own 30s per-participant anti-spam cooldown
+        vm.prank(participant1);
+        campaigns.completeTask(campaignId, 1); // second task, same (already-counted) participant
+
+        assertEq(campaigns.getCampaign(campaignId).totalParticipants, 1);
+        assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 1));
+    }
+
+    function test_VerifyTaskCompletionWithSignature_RevertsOnceParticipantLimitReached() public {
+        uint256 campaignId = _openCampaignWithTask();
+        vm.prank(host1);
+        campaigns.setMaxParticipants(campaignId, 1);
+
+        uint256 startTime = campaigns.getCampaign(campaignId).startTime;
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig1 = _signAttestation(1, address(campaigns), campaignId, participant1, 0, true, 1, deadline);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant1, 0, true, deadline, sig1);
+        assertEq(campaigns.getCampaign(campaignId).totalParticipants, 1);
+
+        bytes memory sig2 = _signAttestation(1, address(campaigns), campaignId, participant2, 0, true, 1, deadline);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__ParticipantLimitReached.selector);
+        campaigns.verifyTaskCompletionWithSignature(campaignId, participant2, 0, true, deadline, sig2);
+    }
+
+    /*//////////////////////////////////////////////////////////////
                             ETH WITHDRAWAL
     //////////////////////////////////////////////////////////////*/
 
