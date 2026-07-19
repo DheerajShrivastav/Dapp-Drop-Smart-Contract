@@ -542,27 +542,38 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @notice Cancel a campaign before anyone has participated, refunding escrowed ERC20 rewards.
-     * @dev Allowed while status is Draft, Open, or Ended, AND totalParticipants == 0 -- the real
-     *      safety invariant is the participant count, not the status. The moment a single
-     *      participant has genuinely engaged, the campaign is locked in and must run its normal
-     *      course (Ended -> Closed -> claims/unclaimed sweep). This closes off a bait-and-switch
-     *      griefing path where a host could otherwise let participants do free work and then
-     *      cancel right before Ended to dodge paying out.
-     *      Ended is included because endCampaign is permissionless: anyone (in practice a keeper)
-     *      can move a past-deadline campaign to Ended regardless of whether it ever had a single
-     *      participant. Without Ended here, a keeper sweeping expired campaigns would strip the
-     *      host of their immediate-refund option on a campaign that never had anyone to protect,
-     *      forcing them into the 30-day closeCampaign -> CLAIM_GRACE_PERIOD -> withdrawUnclaimedERC20
-     *      path for an identical refund. Zero participants means zero claims were ever possible, so
-     *      the Ended and Draft/Open refund amounts are always the same -- only the timing differs.
+     * @notice Cancel a campaign before any settlement has been committed to, refunding escrowed
+     *         ERC20 rewards.
+     * @dev Allowed while status is Draft, Open, or Ended, AND totalParticipants == 0, AND no
+     *      settlement has been published for this campaign on either the ERC20 or NFT path.
+     *      totalParticipants == 0 alone is NOT sufficient once Ended is in scope: totalParticipants
+     *      only tracks completeTask engagement and is entirely decoupled from Merkle settlement --
+     *      a campaign that allocates purely from an off-chain allowlist can have real, claimable
+     *      (even partially-claimed) rewards while totalParticipants stays 0 forever. Without the
+     *      settlement-commitment checks below, a host could publish a root, let some participants
+     *      legitimately claim, then cancel to instantly reclaim the remainder (no dispute window,
+     *      no grace period) and permanently lock out everyone who had not yet claimed -- a rug pull.
+     *      The moment a single participant has genuinely engaged via completeTask (unrelated to
+     *      settlement), the campaign is also locked in (`CampaignHasParticipants`) -- this closes a
+     *      separate bait-and-switch griefing path where a host could let participants do free work
+     *      and then cancel right before Ended to dodge paying out.
+     *      Ended is included in the status check because endCampaign is permissionless: anyone (in
+     *      practice a keeper) can move a past-deadline campaign to Ended regardless of whether it
+     *      ever had a single participant or any settlement committed. Without Ended here, a keeper
+     *      sweeping expired campaigns would strip the host of their immediate-refund option on a
+     *      campaign that never had anyone or anything to protect, forcing them into the 30-day
+     *      closeCampaign -> CLAIM_GRACE_PERIOD -> withdrawUnclaimedERC20 path for an identical
+     *      refund. Once nothing has been committed, the Ended and Draft/Open refund amounts are
+     *      always the same -- only the timing differs.
      *      Closed is deliberately NOT included: once the host has closed the campaign, they've
      *      chosen the 30-day path and closeCampaign has already frozen the Merkle root/started the
      *      grace clock, so there is no immediate-refund case left to restore.
      *      Escrowed NFTs (if any) are NOT auto-refunded here since there is no on-chain enumerable
      *      inventory list per campaign -- call NFTSettlementModule.withdrawUnclaimedERC721/1155
      *      afterward (they become immediately callable once Cancelled, no grace period -- see that
-     *      module's _requireSweepable).
+     *      module's _requireSweepable). The NFT settlement-commitment check below only guards
+     *      against cancelling out from under an already-published NFT root; it does not change
+     *      that reclaim path.
      * @param _campaignId Campaign ID
      */
     function cancelCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
@@ -577,6 +588,15 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.totalParticipants != 0) {
             revert Web3Campaigns__CampaignHasParticipants();
         }
+        // Structurally impossible to fail while Draft/Open (both settlement paths require Ended),
+        // so this only ever bites the Ended case -- exactly where it's needed.
+        if (_erc20SettlementMode[_campaignId] != ERC20SettlementMode.UNSET) {
+            revert Web3Campaigns__CampaignNotCancellable();
+        }
+        address nftModule = _campaignNFTModule[_campaignId];
+        if (nftModule != address(0) && INFTSettlementModule(nftModule).getNFTMerkleRoot(_campaignId) != bytes32(0)) {
+            revert Web3Campaigns__CampaignNotCancellable();
+        }
 
         campaign.status = CampaignStatus.Cancelled;
         emit CampaignStatusUpdated(_campaignId, CampaignStatus.Cancelled);
@@ -588,8 +608,9 @@ contract CampaignManagement is CampaignStorage {
     /// @dev Silently refunds any escrowed-but-undistributed ERC20 to the host and marks the
     /// campaign swept, without reverting if there's nothing configured/escrowed to refund (unlike
     /// the explicit withdrawUnclaimedERC20, which is meant to be called standalone and should be
-    /// noisy about a no-op). Distributed is guaranteed 0 here since claims require a participant to
-    /// claim against, and cancelCampaign's own guard never allows totalParticipants != 0.
+    /// noisy about a no-op). Distributed is guaranteed 0 here since cancelCampaign's own guard
+    /// requires ERC20SettlementMode.UNSET -- no root/tiered mode was ever committed, so no claim
+    /// was ever possible.
     function _refundERC20IfAny(uint256 _campaignId) internal returns (uint256 refunded) {
         if (_erc20Swept[_campaignId]) {
             return 0;
