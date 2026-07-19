@@ -620,7 +620,15 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @dev Sets the campaign status to Open. Can only be called by the host.
+     * @notice Sets the campaign status to Open. Host-only, deliberately.
+     * @dev Kept host-gated (unlike endCampaign, which is permissionless) because opening is a
+     *      judgment call, not a mechanical time transition: it is the host asserting "configuration
+     *      is complete -- tasks added, reward funded -- go live." Draft is the host's private
+     *      staging area, and auto-opening a half-configured or unfunded campaign (e.g. the moment a
+     *      startTime passed) would expose participants to a campaign that can never actually pay
+     *      out. Opening host-only does not reintroduce the abandoned-host lockup endCampaign fixes:
+     *      that lockup happens AFTER a campaign is already Open, so requiring the host to be present
+     *      for the open step is harmless to it.
      * @param _campaignId The ID of the campaign.
      */
     function openCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
@@ -634,13 +642,27 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @dev Sets the campaign status to Ended. Can only be called by the host.
-     * This allows claims to begin.
+     * @notice Transition an Open campaign to Ended once its scheduled endTime has passed.
+     * @dev PERMISSIONLESS -- deliberately NOT host-gated (unlike openCampaign/closeCampaign). This
+     *      is a purely time-triggered transition: the only precondition a caller cannot influence is
+     *      `block.timestamp >= endTime`, which the host themselves set. Anyone (in practice the
+     *      platform's keeper/automation, but also any participant) may call it, so a campaign always
+     *      ends on schedule even if the host has gone offline or abandoned the project. This closes
+     *      a real fund-lockup: without it, a host who opens a campaign and then disappears would
+     *      leave it stuck in Open forever -- participants could never reach Ended, so could never
+     *      claim, and the escrow could never move. There is no way to end EARLY (the endTime gate is
+     *      unchanged), so opening this up costs participants nothing: no one can cut a campaign short.
+     *      Note this only unblocks the TIME-based transition; for a MERKLE campaign whose host
+     *      vanished before publishing an allocation root, claims still require that root -- see
+     *      docs/REWARD_SYSTEM.md for why tiered mode is the fully host-independent option.
      * @param _campaignId The ID of the campaign.
      */
-    function endCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
+    function endCampaign(uint256 _campaignId) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
 
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
         if (campaign.status != CampaignStatus.Open) {
             revert Web3Campaigns__CampaignNotOpen();
         }
@@ -656,7 +678,17 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @dev Closes the campaign, preventing further claims. Only callable by the host.
+     * @notice Ended -> Closed, starting the unclaimed-sweep grace window. Host-only, deliberately.
+     * @dev Kept host-gated (unlike endCampaign) on purpose. Closing freezes the Merkle root (roots
+     *      are updatable while Ended, frozen at Closed), so a permissionless close would let a
+     *      griefer close the instant a campaign ends and lock the host out of publishing or
+     *      correcting an allocation root during the dispute window. Closing is also purely a host
+     *      convenience -- it starts the 30-day clock after which the HOST reclaims unclaimed escrow,
+     *      so there is no one but the host with a reason to call it. Leaving it host-only creates no
+     *      lockup: claims work indefinitely in Ended (an abandoned campaign's participants can still
+     *      claim forever), the host simply never reclaims the leftover dust -- which a vanished host
+     *      would not do anyway. A safely time-gated permissionless close (respecting the
+     *      per-root dispute window) is a possible future refinement, tracked in docs/NEXT_STEPS.md.
      * @param _campaignId The ID of the campaign.
      */
     function closeCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
