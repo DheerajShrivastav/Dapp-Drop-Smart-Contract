@@ -32,6 +32,13 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 contract NFTSettlementModule is INFTSettlementModule {
     address public immutable WEB3_CAMPAIGNS;
 
+    // Local copies of Web3Campaigns' SETTLER_ROLE (same keccak256 value, so hasRole checks agree)
+    // and SETTLEMENT_FALLBACK_DELAY (internal there purely for entrypoint bytecode headroom -- see
+    // CampaignStorage.sol). This module has ample headroom, so duplicating them locally is cheap and
+    // avoids Web3Campaigns needing to expose either cross-contract.
+    bytes32 internal constant SETTLER_ROLE = keccak256("SETTLER_ROLE");
+    uint256 internal constant SETTLEMENT_FALLBACK_DELAY = 14 days;
+
     error NFTSettlementModule__NotWeb3Campaigns();
     error NFTSettlementModule__NotCampaignHost();
     error NFTSettlementModule__NotAuthoritativeModule();
@@ -41,8 +48,13 @@ contract NFTSettlementModule is INFTSettlementModule {
     mapping(uint256 => mapping(bytes32 => bool)) internal _nftLeafClaimed; // campaignId => leaf => claimed
     mapping(uint256 => mapping(address => mapping(uint256 => bool))) internal _escrowedERC721; // id => token => tokenId => held
     mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _escrowedERC1155; // id => token => tokenId => amount held
+    // campaignId => endTime, cached at first deposit (see recordERC721Deposit/recordERC1155Deposit)
+    // for the settler-fallback delay check -- endTime is immutable once a campaign is created, so
+    // caching it here is always correct and avoids a dedicated cross-contract getter on Web3Campaigns.
+    mapping(uint256 => uint256) internal _campaignEndTime;
 
     event NFTMerkleRootSet(uint256 indexed campaignId, bytes32 merkleRoot);
+    event FallbackRootPublished(uint256 indexed campaignId, address indexed settler);
     event NFTRewardClaimed(
         uint256 indexed campaignId,
         address indexed account,
@@ -106,10 +118,11 @@ contract NFTSettlementModule is INFTSettlementModule {
 
     /// @notice Record ERC721 tokenIds as escrowed for a campaign. Called by Web3Campaigns
     /// immediately after it pulls the tokens into its own custody via depositERC721Rewards.
-    function recordERC721Deposit(uint256 _campaignId, address _token, uint256[] calldata _tokenIds)
+    function recordERC721Deposit(uint256 _campaignId, address _token, uint256[] calldata _tokenIds, uint256 _endTime)
         external
         onlyWeb3Campaigns
     {
+        _campaignEndTime[_campaignId] = _endTime;
         uint256 len = _tokenIds.length;
         for (uint256 i; i < len; ++i) {
             _escrowedERC721[_campaignId][_token][_tokenIds[i]] = true;
@@ -122,8 +135,10 @@ contract NFTSettlementModule is INFTSettlementModule {
         uint256 _campaignId,
         address _token,
         uint256[] calldata _ids,
-        uint256[] calldata _amounts
+        uint256[] calldata _amounts,
+        uint256 _endTime
     ) external onlyWeb3Campaigns {
+        _campaignEndTime[_campaignId] = _endTime;
         uint256 len = _ids.length;
         for (uint256 i; i < len; ++i) {
             _escrowedERC1155[_campaignId][_token][_ids[i]] += _amounts[i];
@@ -139,13 +154,35 @@ contract NFTSettlementModule is INFTSettlementModule {
      *      Updatable while Ended, frozen at Closed. Publishing a NEW root value rearms
      *      ROOT_DISPUTE_WINDOW (claimNFT rejects claims against it until the window elapses); a
      *      no-op republish of the byte-identical root does not rearm.
+     * @dev Callable by the host at any time (Ended), OR by SETTLER_ROLE strictly as a fallback for
+     *      an abandoned campaign: caller must hold SETTLER_ROLE, the campaign must be Ended, no NFT
+     *      root may have EVER been published for it (a settler can only fill a vacuum, never
+     *      override/correct/race a host-published root), and SETTLEMENT_FALLBACK_DELAY must have
+     *      elapsed since endTime. The host retains full authority at all times, including
+     *      publishing/correcting a root AFTER a settler has acted -- mirrors
+     *      Web3Campaigns.setERC20MerkleRoot's identical fallback rule.
      */
     function setNFTMerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) external {
         _requireAuthoritative(_campaignId);
-        CampaignStorage.CampaignStatus status = _requireHost(_campaignId);
+        (address host, CampaignStorage.CampaignStatus status) =
+            IWeb3CampaignsForNFTModule(WEB3_CAMPAIGNS).getCampaignHostAndStatus(_campaignId);
         if (status != CampaignStorage.CampaignStatus.Ended) {
             revert CampaignStorage.Web3Campaigns__CampaignNotYetEnded();
         }
+
+        bool isSettlerFallback = msg.sender != host;
+        if (isSettlerFallback) {
+            if (!IWeb3CampaignsForNFTModule(WEB3_CAMPAIGNS).hasRole(SETTLER_ROLE, msg.sender)) {
+                revert NFTSettlementModule__NotCampaignHost();
+            }
+            if (_nftMerkleRoot[_campaignId] != bytes32(0)) {
+                revert CampaignStorage.Web3Campaigns__RootAlreadyPublished();
+            }
+            if (block.timestamp < _campaignEndTime[_campaignId] + SETTLEMENT_FALLBACK_DELAY) {
+                revert CampaignStorage.Web3Campaigns__FallbackDelayNotElapsed();
+            }
+        }
+
         if (_merkleRoot == bytes32(0)) {
             revert CampaignStorage.Web3Campaigns__MerkleRootNotSet();
         }
@@ -155,6 +192,9 @@ contract NFTSettlementModule is INFTSettlementModule {
         }
         _nftMerkleRoot[_campaignId] = _merkleRoot;
         emit NFTMerkleRootSet(_campaignId, _merkleRoot);
+        if (isSettlerFallback) {
+            emit FallbackRootPublished(_campaignId, msg.sender);
+        }
     }
 
     // --- Participant claim ---

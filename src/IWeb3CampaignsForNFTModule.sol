@@ -46,4 +46,10 @@ interface IWeb3CampaignsForNFTModule {
         uint256 amount,
         address recipient
     ) external;
+
+    /// @notice Standard AccessControl role check -- already public on Web3Campaigns (inherited from
+    /// OZ AccessControl, used throughout for its own onlyRole checks), declared here purely so the
+    /// module can check SETTLER_ROLE membership for its settler-fallback branch of setNFTMerkleRoot
+    /// without Web3Campaigns needing any new function or bytecode.
+    function hasRole(bytes32 role, address account) external view returns (bool);
 }

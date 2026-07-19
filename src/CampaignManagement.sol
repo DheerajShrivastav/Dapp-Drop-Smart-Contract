@@ -335,14 +335,25 @@ contract CampaignManagement is CampaignStorage {
      *      ROOT_DISPUTE_WINDOW (claimERC20 rejects claims against it until the window elapses); a
      *      no-op republish of the byte-identical root does not rearm, since there is nothing new
      *      for participants to review.
+     * @dev Callable by the host at any time (Ended), OR by SETTLER_ROLE strictly as a fallback for
+     *      an abandoned campaign -- see _requireSettlerFallbackEligible. A settler can only ever
+     *      fill a settlement VACUUM (no root ever published for this campaign): it can never
+     *      override, correct, or race a root the host already set, and the host retains full
+     *      authority at all times, including publishing/correcting a root AFTER a settler has
+     *      acted (same rearm-on-change / no-rearm-on-republish rule applies either way).
      * @param _campaignId Campaign ID
      * @param _merkleRoot The settlement Merkle root
      */
-    function setERC20MerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public onlyHost(_campaignId) {
+    function setERC20MerkleRoot(uint256 _campaignId, bytes32 _merkleRoot) public {
         Campaign storage campaign = _campaigns[_campaignId];
+        _requireExistsAndEnded(campaign);
 
-        if (campaign.status != CampaignStatus.Ended) {
-            revert Web3Campaigns__CampaignNotYetEnded();
+        bool isSettlerFallback = campaign.host != msg.sender;
+        if (isSettlerFallback) {
+            _requireSettlerRoleAndTiming(campaign);
+            if (_erc20MerkleRoot[_campaignId] != bytes32(0)) {
+                revert Web3Campaigns__RootAlreadyPublished();
+            }
         }
         // Publishing a Merkle root is the MERKLE-path-specific action, so it is what commits the
         // campaign to MERKLE settlement (from UNSET) -- or, if the campaign already committed to a
@@ -364,6 +375,38 @@ contract CampaignManagement is CampaignStorage {
         }
         _erc20MerkleRoot[_campaignId] = _merkleRoot;
         emit ERC20MerkleRootSet(_campaignId, _merkleRoot);
+        if (isSettlerFallback) {
+            emit FallbackRootPublished(_campaignId, msg.sender);
+        }
+    }
+
+    /// @dev Shared by setERC20MerkleRoot/closeCampaign (both dropped their onlyHost modifier to make
+    /// room for the settler-fallback branch): campaign must exist and be Ended. Applies to host and
+    /// settler callers alike, checked once per entrypoint rather than once per branch -- the
+    /// existence check is what onlyHost used to give for free (see endCampaign's identical explicit
+    /// re-add when it went permissionless, docs/SECURITY_FINDINGS.md).
+    function _requireExistsAndEnded(Campaign storage campaign) internal view {
+        if (campaign.id == 0) {
+            revert Web3Campaigns__CampaignNotFound();
+        }
+        if (campaign.status != CampaignStatus.Ended) {
+            revert Web3Campaigns__CampaignNotYetEnded();
+        }
+    }
+
+    /// @dev The two checks common to BOTH settler-fallback entrypoints (setERC20MerkleRoot,
+    /// closeCampaign), beyond the shared _requireEnded above: caller must hold SETTLER_ROLE, and
+    /// SETTLEMENT_FALLBACK_DELAY must have elapsed since endTime. Each call site additionally
+    /// enforces its own "is there a vacuum to fill" condition with its own distinct error
+    /// (RootAlreadyPublished vs SettlementNotPublished) immediately around this call, since that
+    /// check differs by entrypoint and cannot be folded in here without losing the specific error.
+    function _requireSettlerRoleAndTiming(Campaign storage campaign) internal view {
+        if (!hasRole(SETTLER_ROLE, msg.sender)) {
+            revert Web3Campaigns__CallerIsNotHost();
+        }
+        if (block.timestamp < campaign.endTime + SETTLEMENT_FALLBACK_DELAY) {
+            revert Web3Campaigns__FallbackDelayNotElapsed();
+        }
     }
 
     /**
@@ -452,7 +495,8 @@ contract CampaignManagement is CampaignStorage {
 
         // Pin the module BEFORE recording escrow bookkeeping in it -- see _pinNFTModule.
         address module = _pinNFTModule(_campaignId);
-        INFTSettlementModule(module).recordERC721Deposit(_campaignId, _token, _tokenIds);
+        INFTSettlementModule(module)
+            .recordERC721Deposit(_campaignId, _token, _tokenIds, _campaigns[_campaignId].endTime);
 
         emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC721, len);
 
@@ -493,7 +537,8 @@ contract CampaignManagement is CampaignStorage {
         }
 
         address module = _pinNFTModule(_campaignId);
-        INFTSettlementModule(module).recordERC1155Deposit(_campaignId, _token, _ids, _amounts);
+        INFTSettlementModule(module)
+            .recordERC1155Deposit(_campaignId, _token, _ids, _amounts, _campaigns[_campaignId].endTime);
 
         emit NFTRewardsDeposited(_campaignId, _token, NFTStandard.ERC1155, len);
 
@@ -589,12 +634,13 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__CampaignHasParticipants();
         }
         // Structurally impossible to fail while Draft/Open (both settlement paths require Ended),
-        // so this only ever bites the Ended case -- exactly where it's needed.
+        // so this only ever bites the Ended case -- exactly where it's needed. Also catches a
+        // settler-published root (a fallback publish locks the ERC20 mode / sets the NFT root
+        // exactly like a host publish does), so a returning host can never cancel out from under one.
         if (_erc20SettlementMode[_campaignId] != ERC20SettlementMode.UNSET) {
             revert Web3Campaigns__CampaignNotCancellable();
         }
-        address nftModule = _campaignNFTModule[_campaignId];
-        if (nftModule != address(0) && INFTSettlementModule(nftModule).getNFTMerkleRoot(_campaignId) != bytes32(0)) {
+        if (_nftSettlementPublished(_campaignId)) {
             revert Web3Campaigns__CampaignNotCancellable();
         }
 
@@ -713,28 +759,51 @@ contract CampaignManagement is CampaignStorage {
     }
 
     /**
-     * @notice Ended -> Closed, starting the unclaimed-sweep grace window. Host-only, deliberately.
-     * @dev Kept host-gated (unlike endCampaign) on purpose. Closing freezes the Merkle root (roots
-     *      are updatable while Ended, frozen at Closed), so a permissionless close would let a
-     *      griefer close the instant a campaign ends and lock the host out of publishing or
+     * @notice Ended -> Closed, starting the unclaimed-sweep grace window. Host-only for a normal
+     *         campaign; SETTLER_ROLE may close as a last-resort fallback for an abandoned one.
+     * @dev Kept host-gated for the normal path, on purpose. Closing freezes the Merkle root (roots
+     *      are updatable while Ended, frozen at Closed), so a permissionlessly-open close would let
+     *      a griefer close the instant a campaign ends and lock the host out of publishing or
      *      correcting an allocation root during the dispute window. Closing is also purely a host
-     *      convenience -- it starts the 30-day clock after which the HOST reclaims unclaimed escrow,
-     *      so there is no one but the host with a reason to call it. Leaving it host-only creates no
-     *      lockup: claims work indefinitely in Ended (an abandoned campaign's participants can still
-     *      claim forever), the host simply never reclaims the leftover dust -- which a vanished host
-     *      would not do anyway. A safely time-gated permissionless close (respecting the
-     *      per-root dispute window) is a possible future refinement, tracked in docs/NEXT_STEPS.md.
+     *      convenience -- it starts the 30-day clock after which the HOST reclaims unclaimed escrow.
+     *      The settler-fallback branch exists for the case that convenience never gets exercised: an
+     *      abandoned campaign whose host never returns to close it would otherwise sit in Ended
+     *      forever with its unclaimed dust permanently unreclaimable by anyone. SETTLER_ROLE may
+     *      close only once ALL of: status is Ended, a Merkle root has been published on EITHER path
+     *      (by the host or by a settler fallback publish -- never by a settler closing an
+     *      unsettled campaign, which would let a griefer lock in Closed with nothing ever claimable),
+     *      AND SETTLEMENT_FALLBACK_DELAY has elapsed since endTime. Sweep functions
+     *      (withdrawUnclaimedERC20/withdrawUnclaimedERC721/withdrawUnclaimedERC1155) remain
+     *      host-only and pay only the host -- a settler-triggered close merely starts the grace
+     *      clock, it never redirects where the eventual sweep goes; unswept leftover dust of a truly
+     *      abandoned host is that host's own loss, unchanged from before this feature.
      * @param _campaignId The ID of the campaign.
      */
-    function closeCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
+    function closeCampaign(uint256 _campaignId) public virtual {
         Campaign storage campaign = _campaigns[_campaignId];
+        _requireExistsAndEnded(campaign);
 
-        if (campaign.status != CampaignStatus.Ended) {
-            revert Web3Campaigns__CampaignNotYetEnded();
+        bool isSettlerFallback = campaign.host != msg.sender;
+        if (isSettlerFallback) {
+            _requireSettlerRoleAndTiming(campaign);
+            if (_erc20MerkleRoot[_campaignId] == bytes32(0) && !_nftSettlementPublished(_campaignId)) {
+                revert Web3Campaigns__SettlementNotPublished();
+            }
         }
 
         campaign.status = CampaignStatus.Closed;
         _campaignClosedAt[_campaignId] = uint64(block.timestamp); // start of the unclaimed-sweep grace window
         emit CampaignStatusUpdated(_campaignId, CampaignStatus.Closed);
+        if (isSettlerFallback) {
+            emit FallbackClosed(_campaignId, msg.sender);
+        }
+    }
+
+    /// @dev True if this campaign has a published NFT settlement root on its pinned
+    /// NFTSettlementModule (false if never pinned, i.e. never deposited an NFT). Shared by
+    /// cancelCampaign's settlement-commitment guard and closeCampaign's settler-fallback gate.
+    function _nftSettlementPublished(uint256 _campaignId) internal view returns (bool) {
+        address nftModule = _campaignNFTModule[_campaignId];
+        return nftModule != address(0) && INFTSettlementModule(nftModule).getNFTMerkleRoot(_campaignId) != bytes32(0);
     }
 }

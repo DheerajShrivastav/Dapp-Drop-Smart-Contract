@@ -17,6 +17,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     bytes32 public constant MODERATOR_ROLE = keccak256("MODERATOR_ROLE");
     // Signer role: backend keys authorized to sign off-chain task-completion attestations
     bytes32 public constant SIGNER_ROLE = keccak256("SIGNER_ROLE");
+    // Settler role: platform-controlled keys allowed to fill a settlement vacuum on a Merkle
+    // campaign whose host has abandoned it -- see SETTLEMENT_FALLBACK_DELAY below and
+    // docs/SECURITY_FINDINGS.md for the trust-model note.
+    bytes32 public constant SETTLER_ROLE = keccak256("SETTLER_ROLE");
 
     // --- Custom Errors ---
     error Web3Campaigns__CampaignNotFound();
@@ -58,6 +62,10 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     error Web3Campaigns__TreasuryNotSet();
     error Web3Campaigns__InvalidParticipantLimit();
     error Web3Campaigns__ParticipantLimitReached();
+    // Settler fallback errors
+    error Web3Campaigns__FallbackDelayNotElapsed();
+    error Web3Campaigns__RootAlreadyPublished();
+    error Web3Campaigns__SettlementNotPublished();
     // Signature Verification Errors
     error Web3Campaigns__SignatureExpired();
     error Web3Campaigns__InvalidSigner();
@@ -103,6 +111,20 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // as this ordering holds, the dispute window on the final root has always long since elapsed by
     // the time a sweep is possible.
     uint256 public constant ROOT_DISPUTE_WINDOW = 24 hours;
+    // Time after a campaign's endTime before SETTLER_ROLE may fill a Merkle-settlement vacuum on
+    // it (publish a fallback root, or close it once a root exists). This is a fallback of LAST
+    // RESORT for a genuinely abandoned campaign, not a normal path: the host retains full,
+    // unconditional authority at all times, including AFTER a settler has acted (a host republish
+    // still works exactly as before -- see setERC20MerkleRoot/NFTSettlementModule.setNFTMerkleRoot).
+    // A settler can only ever fill a vacuum (no root yet published) -- it can never override,
+    // correct, or race a root the host already set. See docs/SECURITY_FINDINGS.md for the full
+    // trust-model note. Internal (not public, unlike ROOT_DISPUTE_WINDOW/CLAIM_GRACE_PERIOD) purely
+    // for entrypoint bytecode headroom -- Web3Campaigns was down to a few hundred bytes before this
+    // feature; a public constant's auto-generated getter has a real dispatcher-entry cost. The exact
+    // same 14-day value is duplicated as its own local constant on NFTSettlementModule (which has
+    // ample headroom) rather than read cross-contract, so nothing outside Web3Campaigns' own
+    // ERC20-path logic needs this getter. Change both copies together if this value is ever tuned.
+    uint256 internal constant SETTLEMENT_FALLBACK_DELAY = 14 days;
 
     // EIP-712 typehash for a signed task-completion attestation. `version` is the per
     // (participant, campaign, task) attestation counter — it doubles as the leaf's replay
@@ -290,6 +312,11 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     event EtherWithdrawn(address indexed to, uint256 amount);
     event TreasuryUpdated(address indexed treasury);
     event MaxParticipantsUpdated(uint256 indexed campaignId, uint256 maxParticipants);
+    // Settler fallback events -- always paired with the normal state-change event they ride along
+    // with (ERC20MerkleRootSet / CampaignStatusUpdated), so indexers get both "what changed" and
+    // "a settler, not the host, changed it" without a schema fork.
+    event FallbackRootPublished(uint256 indexed campaignId, address indexed settler);
+    event FallbackClosed(uint256 indexed campaignId, address indexed settler);
 
     event OffChainRewardConfigured(uint256 indexed campaignId, string description);
     event BatchTasksVerified(uint256 indexed campaignId, uint256 count);
