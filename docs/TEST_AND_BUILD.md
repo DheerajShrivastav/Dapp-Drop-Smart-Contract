@@ -1,6 +1,6 @@
 # Test Coverage & Build — Web3Campaigns
 
-> As of `feature/settler-fallback-settlement` (off `feature/permissionless-lifecycle`, off `dev` post-PR #19).
+> As of `feature/cap-hoist-and-v0.6.0` (off `dev` post-PR #21; VERSION 0.6.0).
 
 ## Toolchain (now set up)
 

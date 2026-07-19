@@ -21,7 +21,7 @@ contract Web3Campaigns is
     ERC1155Holder
 {
     // Version for tracking contract upgrades
-    string public constant VERSION = "0.5.0";
+    string public constant VERSION = "0.6.0";
 
     constructor() {
         // Grant emergency admin, moderator, (bootstrap) signer, and (bootstrap) settler roles to
