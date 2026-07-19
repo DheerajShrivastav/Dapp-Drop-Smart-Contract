@@ -543,11 +543,22 @@ contract CampaignManagement is CampaignStorage {
 
     /**
      * @notice Cancel a campaign before anyone has participated, refunding escrowed ERC20 rewards.
-     * @dev Only allowed while status is Draft or Open AND totalParticipants == 0 -- the moment a
-     *      single participant has genuinely engaged, the campaign is locked in and must run its
-     *      normal course (Ended -> Closed -> claims/unclaimed sweep). This closes off a
-     *      bait-and-switch griefing path where a host could otherwise let participants do free
-     *      work and then cancel right before Ended to dodge paying out.
+     * @dev Allowed while status is Draft, Open, or Ended, AND totalParticipants == 0 -- the real
+     *      safety invariant is the participant count, not the status. The moment a single
+     *      participant has genuinely engaged, the campaign is locked in and must run its normal
+     *      course (Ended -> Closed -> claims/unclaimed sweep). This closes off a bait-and-switch
+     *      griefing path where a host could otherwise let participants do free work and then
+     *      cancel right before Ended to dodge paying out.
+     *      Ended is included because endCampaign is permissionless: anyone (in practice a keeper)
+     *      can move a past-deadline campaign to Ended regardless of whether it ever had a single
+     *      participant. Without Ended here, a keeper sweeping expired campaigns would strip the
+     *      host of their immediate-refund option on a campaign that never had anyone to protect,
+     *      forcing them into the 30-day closeCampaign -> CLAIM_GRACE_PERIOD -> withdrawUnclaimedERC20
+     *      path for an identical refund. Zero participants means zero claims were ever possible, so
+     *      the Ended and Draft/Open refund amounts are always the same -- only the timing differs.
+     *      Closed is deliberately NOT included: once the host has closed the campaign, they've
+     *      chosen the 30-day path and closeCampaign has already frozen the Merkle root/started the
+     *      grace clock, so there is no immediate-refund case left to restore.
      *      Escrowed NFTs (if any) are NOT auto-refunded here since there is no on-chain enumerable
      *      inventory list per campaign -- call NFTSettlementModule.withdrawUnclaimedERC721/1155
      *      afterward (they become immediately callable once Cancelled, no grace period -- see that
@@ -557,7 +568,10 @@ contract CampaignManagement is CampaignStorage {
     function cancelCampaign(uint256 _campaignId) public virtual onlyHost(_campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
 
-        if (campaign.status != CampaignStatus.Draft && campaign.status != CampaignStatus.Open) {
+        if (
+            campaign.status != CampaignStatus.Draft && campaign.status != CampaignStatus.Open
+                && campaign.status != CampaignStatus.Ended
+        ) {
             revert Web3Campaigns__CampaignNotCancellable();
         }
         if (campaign.totalParticipants != 0) {
@@ -574,8 +588,8 @@ contract CampaignManagement is CampaignStorage {
     /// @dev Silently refunds any escrowed-but-undistributed ERC20 to the host and marks the
     /// campaign swept, without reverting if there's nothing configured/escrowed to refund (unlike
     /// the explicit withdrawUnclaimedERC20, which is meant to be called standalone and should be
-    /// noisy about a no-op). Distributed is guaranteed 0 here since claims require Ended status,
-    /// which cancelCampaign's own guard never allows.
+    /// noisy about a no-op). Distributed is guaranteed 0 here since claims require a participant to
+    /// claim against, and cancelCampaign's own guard never allows totalParticipants != 0.
     function _refundERC20IfAny(uint256 _campaignId) internal returns (uint256 refunded) {
         if (_erc20Swept[_campaignId]) {
             return 0;

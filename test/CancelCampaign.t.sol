@@ -9,9 +9,11 @@ import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
-/// @notice Covers cancelCampaign: allowed only in Draft/Open while totalParticipants == 0 (closing
-/// off a bait-and-switch griefing path), immediate ERC20 refund, and immediate NFT reclaim via
-/// NFTSettlementModule.withdrawUnclaimedERC721/1155 (bypassing the grace period once Cancelled).
+/// @notice Covers cancelCampaign: allowed in Draft/Open/Ended while totalParticipants == 0 (closing
+/// off a bait-and-switch griefing path via the participant guard, not the status), immediate ERC20
+/// refund, and immediate NFT reclaim via NFTSettlementModule.withdrawUnclaimedERC721/1155
+/// (bypassing the grace period once Cancelled). Ended is included so a keeper's permissionless
+/// endCampaign call can't strip a zero-participant campaign's host of their immediate refund.
 contract CancelCampaignTest is Test {
     Web3Campaigns public campaigns;
     ERC20Mock public token;
@@ -132,7 +134,30 @@ contract CancelCampaignTest is Test {
                         STATUS GUARDS
     //////////////////////////////////////////////////////////////*/
 
-    function test_CancelCampaign_RevertsIfEnded() public {
+    function test_CancelCampaign_RevertsIfEndedWithParticipants() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _createCampaign();
+
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Follow us", "", false);
+
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(id);
+
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+
+        vm.warp(endTime + 1);
+        vm.prank(host1);
+        campaigns.endCampaign(id);
+
+        // Ended alone no longer blocks cancellation -- but a real participant still does.
+        vm.prank(host1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignHasParticipants.selector);
+        campaigns.cancelCampaign(id);
+    }
+
+    function test_CancelCampaign_RevertsIfClosed() public {
         (uint256 id, uint256 startTime, uint256 endTime) = _createCampaign();
 
         vm.warp(startTime + 1);
@@ -144,8 +169,53 @@ contract CancelCampaignTest is Test {
         campaigns.endCampaign(id);
 
         vm.prank(host1);
+        campaigns.closeCampaign(id);
+
+        // Once closed, the host has chosen the grace-period path -- no cancel escape hatch left.
+        vm.prank(host1);
         vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotCancellable.selector);
         campaigns.cancelCampaign(id);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+        ZERO-PARTICIPANT ENDED CANCELLATION (permissionless endCampaign fix)
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Anyone (a keeper, in practice) can call endCampaign once endTime passes. A
+    /// zero-participant campaign has nothing to protect, so the host must retain their immediate
+    /// refund option regardless of who triggered the Ended transition -- otherwise a keeper
+    /// sweeping expired campaigns would force every unpopular campaign's host into a needless
+    /// 30-day closeCampaign -> withdrawUnclaimedERC20 wait for a refund cancelCampaign would give
+    /// immediately.
+    function test_CancelCampaign_Ended_ZeroParticipants_AfterKeeperEndsIt_Success() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _createCampaign();
+
+        vm.startPrank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+        token.approve(address(campaigns), 500 ether);
+        campaigns.fundCampaignERC20(id, 500 ether);
+        vm.stopPrank();
+
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(id);
+
+        vm.warp(endTime + 1);
+        // A non-host keeper ends the campaign -- permissionless per PR #20.
+        vm.prank(participant1);
+        campaigns.endCampaign(id);
+
+        Web3Campaigns.Campaign memory ended = campaigns.getCampaign(id);
+        assertEq(uint8(ended.status), uint8(CampaignStorage.CampaignStatus.Ended));
+
+        uint256 hostBalBefore = token.balanceOf(host1);
+
+        vm.prank(host1);
+        campaigns.cancelCampaign(id);
+
+        Web3Campaigns.Campaign memory cancelled = campaigns.getCampaign(id);
+        assertEq(uint8(cancelled.status), uint8(CampaignStorage.CampaignStatus.Cancelled));
+        assertEq(token.balanceOf(host1) - hostBalBefore, 500 ether);
     }
 
     function test_CancelCampaign_RevertsIfAlreadyCancelled() public {
