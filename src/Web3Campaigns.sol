@@ -24,12 +24,13 @@ contract Web3Campaigns is
     string public constant VERSION = "0.5.0";
 
     constructor() {
-        // Grant emergency admin, moderator, and (bootstrap) signer roles to deployer.
-        // DEFAULT_ADMIN_ROLE can grantRole/revokeRole(SIGNER_ROLE, ...) to rotate backend
-        // attestation keys without any custom rotation function — that's the intended path.
+        // Grant emergency admin, moderator, (bootstrap) signer, and (bootstrap) settler roles to
+        // deployer. DEFAULT_ADMIN_ROLE can grantRole/revokeRole(SIGNER_ROLE / SETTLER_ROLE, ...) to
+        // rotate backend keys without any custom rotation function — that's the intended path.
         _grantRole(EMERGENCY_ADMIN, msg.sender);
         _grantRole(MODERATOR_ROLE, msg.sender);
         _grantRole(SIGNER_ROLE, msg.sender);
+        _grantRole(SETTLER_ROLE, msg.sender);
     }
 
     /**
