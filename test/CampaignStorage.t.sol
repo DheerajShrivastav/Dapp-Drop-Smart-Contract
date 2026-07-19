@@ -206,6 +206,97 @@ contract CampaignLifecycleTest is Test {
         campaigns.endCampaign(campaignId);
     }
 
+    /// @dev The core of the permissionless-lifecycle change: a non-host (the platform keeper, or
+    /// anyone) can end a campaign once its scheduled endTime has passed. This is what lets a
+    /// campaign end on schedule even if the host has gone offline -- the abandoned-host lockup fix.
+    function test_EndCampaign_PermissionlessAfterEndTime() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("Abandoned host campaign", startTime, endTime);
+
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        // Host never returns. A stranger (keeper) ends it once endTime has passed.
+        vm.warp(endTime + 1);
+        vm.prank(nonHost);
+        campaigns.endCampaign(campaignId);
+
+        assertEq(uint8(campaigns.getCampaign(campaignId).status), uint8(CampaignStorage.CampaignStatus.Ended));
+    }
+
+    /// @dev The endTime gate still binds a non-host caller -- permissionless does not mean "end
+    /// early". No one, host or not, can cut a campaign short.
+    function test_EndCampaign_NonHostStillCannotEndEarly() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, endTime);
+
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotYetEnded.selector);
+        campaigns.endCampaign(campaignId);
+    }
+
+    function test_EndCampaign_RevertsOnNonexistentCampaign() public {
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotFound.selector);
+        campaigns.endCampaign(999);
+    }
+
+    function test_EndCampaign_RevertsIfNotOpen() public {
+        // A freshly-created (Draft) campaign is not Open yet.
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+
+        vm.warp(startTime + CAMPAIGN_DURATION + 1); // past endTime, but still Draft
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotOpen.selector);
+        campaigns.endCampaign(campaignId);
+    }
+
+    /// @dev openCampaign stays host-only -- a non-host cannot force a campaign live (guards against
+    /// a half-configured campaign being opened out from under the host).
+    function test_OpenCampaign_StillHostOnly() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+
+        vm.warp(startTime + 1);
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CallerIsNotHost.selector);
+        campaigns.openCampaign(campaignId);
+    }
+
+    /// @dev closeCampaign stays host-only -- prevents a griefer freezing the Merkle root the instant
+    /// a campaign ends.
+    function test_CloseCampaign_StillHostOnly() public {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        uint256 endTime = startTime + CAMPAIGN_DURATION;
+        vm.prank(host1);
+        uint256 campaignId = campaigns.createCampaign("C", startTime, endTime);
+
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        campaigns.openCampaign(campaignId);
+        vm.warp(endTime + 1);
+        vm.prank(nonHost);
+        campaigns.endCampaign(campaignId); // permissionless end is fine
+
+        vm.prank(nonHost);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CallerIsNotHost.selector);
+        campaigns.closeCampaign(campaignId);
+    }
+
     function test_GrantHostRole_Success() public {
         address newHost = makeAddr("newHost");
         vm.prank(deployer);

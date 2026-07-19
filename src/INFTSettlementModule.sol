@@ -15,4 +15,9 @@ interface INFTSettlementModule {
     /// Web3Campaigns pulls them into custody via depositERC1155Rewards.
     function recordERC1155Deposit(uint256 campaignId, address token, uint256[] calldata ids, uint256[] calldata amounts)
         external;
+
+    /// @notice The currently published NFT settlement root for a campaign, or bytes32(0) if none
+    /// has ever been published. Used by cancelCampaign to refuse cancelling a campaign that has
+    /// already committed to an NFT settlement -- see that function's docstring.
+    function getNFTMerkleRoot(uint256 campaignId) external view returns (bytes32);
 }
