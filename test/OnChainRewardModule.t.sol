@@ -62,6 +62,11 @@ contract OnChainRewardModuleTest is Test {
         campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Follow us", "", false);
     }
 
+    function _addOptionalSocialTask(uint256 id) internal {
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Bonus", "", true);
+    }
+
     function _fundEscrow(uint256 id, uint256 amount) internal {
         vm.startPrank(host1);
         token.approve(address(campaigns), amount);
@@ -194,7 +199,7 @@ contract OnChainRewardModuleTest is Test {
     function test_ScoreTiered_TaskPointsDriveTierMatch() public {
         (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
         _addSocialTask(id);
-        _addSocialTask(id);
+        _addOptionalSocialTask(id); // bonus points; participant2 skips it and still qualifies
 
         vm.prank(host1);
         campaigns.configureERC20Reward(id, address(token));
@@ -791,6 +796,156 @@ contract OnChainRewardModuleTest is Test {
         vm.expectRevert(CampaignStorage.Web3Campaigns__AlreadyClaimedSettlement.selector);
         vm.prank(address(module));
         campaigns.payOnChainReward(id, participant1, 1 ether, 1);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                  SCORE_TIERED QUALIFICATION (required tasks)
+    //////////////////////////////////////////////////////////////*/
+
+    function _setScoreTiers(uint256 id, uint256[] memory minScores, uint256[] memory amounts) internal {
+        vm.prank(host1);
+        module.setScoreTiers(id, minScores, amounts);
+    }
+
+    function _setPoints(uint256 id, uint256 taskIndex, uint256 pts) internal {
+        uint256[] memory taskIndices = new uint256[](1);
+        uint256[] memory points = new uint256[](1);
+        taskIndices[0] = taskIndex;
+        points[0] = pts;
+        vm.prank(host1);
+        module.setTaskPoints(id, taskIndices, points);
+    }
+
+    /// @notice Regression: a minScore-0 floor tier used to pay ANY address -- including one that
+    /// never touched the campaign -- because the SCORE path skipped the qualification check.
+    function test_ScoreTiered_StrangerCannotClaimZeroFloorTier() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        _addSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory minScores = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1 ether; // minScore 0
+        _setScoreTiers(id, minScores, amounts);
+
+        _fundEscrow(id, 100 ether);
+        _openCampaign(id, startTime);
+        _endCampaign(id, endTime);
+
+        address stranger = makeAddr("stranger");
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotFullyCompleted.selector);
+        vm.prank(stranger);
+        module.claimReward(id);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotFullyCompleted.selector);
+        vm.prank(makeAddr("relayer"));
+        module.claimRewardFor(id, stranger);
+
+        assertEq(token.balanceOf(stranger), 0);
+        assertEq(campaigns.getCampaign(id).totalParticipants, 0);
+    }
+
+    /// @notice Score from optional tasks alone must not pay while a required task (here a
+    /// HUMANITY_VERIFICATION gate) is incomplete.
+    function test_ScoreTiered_MissingRequiredHumanityTaskCannotClaim() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.HUMANITY_VERIFICATION, "Human", "", false);
+        _addOptionalSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+        _setPoints(id, 1, 10);
+
+        uint256[] memory minScores = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        minScores[0] = 10;
+        amounts[0] = 100 ether;
+        _setScoreTiers(id, minScores, amounts);
+
+        _fundEscrow(id, 100 ether);
+        _openCampaign(id, startTime);
+
+        vm.prank(participant1);
+        campaigns.completeTask(id, 1); // optional, score 10, humanity task still missing
+
+        _endCampaign(id, endTime);
+
+        (,, uint256 score, bool qualified,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(score, 10);
+        assertFalse(qualified);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotFullyCompleted.selector);
+        vm.prank(participant1);
+        module.claimReward(id);
+        assertEq(token.balanceOf(participant1), 0);
+    }
+
+    /// @notice With qualification enforced, a minScore-0 tier is a legitimate floor reward for a
+    /// participant who completed every required task but earned no points.
+    function test_ScoreTiered_QualifiedZeroScoreGetsFloorTier() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        _addSocialTask(id); // required, 0 points
+        _addOptionalSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+        _setPoints(id, 1, 10);
+
+        uint256[] memory minScores = new uint256[](2);
+        uint256[] memory amounts = new uint256[](2);
+        minScores[0] = 10;
+        amounts[0] = 100 ether;
+        amounts[1] = 5 ether; // minScore 0 floor
+        _setScoreTiers(id, minScores, amounts);
+
+        _fundEscrow(id, 105 ether);
+        _openCampaign(id, startTime);
+
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+
+        _endCampaign(id, endTime);
+
+        vm.prank(participant1);
+        module.claimReward(id);
+        assertEq(token.balanceOf(participant1), 5 ether);
+    }
+
+    /// @notice A signer revoking a required task after the participant qualified blocks the SCORE
+    /// claim -- even though a minScore-0 floor tier would otherwise still match.
+    function test_ScoreTiered_RevokedRequiredTaskBlocksClaim() public {
+        (uint256 id, uint256 startTime, uint256 endTime) = _draftCampaign();
+        _addSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+        _setPoints(id, 0, 10);
+
+        uint256[] memory minScores = new uint256[](2);
+        uint256[] memory amounts = new uint256[](2);
+        minScores[0] = 10;
+        amounts[0] = 100 ether;
+        amounts[1] = 5 ether; // minScore 0 floor
+        _setScoreTiers(id, minScores, amounts);
+
+        _fundEscrow(id, 105 ether);
+        _openCampaign(id, startTime);
+
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+        (,,, bool qualifiedBefore,) = module.getOnChainRewardStatus(id, participant1);
+        assertTrue(qualifiedBefore);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 digest = _attestationDigest(id, participant1, 0, false, 1, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
+        campaigns.verifyTaskCompletionWithSignature(id, participant1, 0, false, deadline, abi.encodePacked(r, s, v));
+
+        _endCampaign(id, endTime);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotFullyCompleted.selector);
+        vm.prank(participant1);
+        module.claimReward(id);
+        assertEq(token.balanceOf(participant1), 0);
     }
 
     function _attestationDigest(
