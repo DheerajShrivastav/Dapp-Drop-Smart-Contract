@@ -590,7 +590,14 @@ contract CampaignManagement is CampaignStorage {
      * @notice Cancel a campaign before any settlement has been committed to, refunding escrowed
      *         ERC20 rewards.
      * @dev Allowed while status is Draft, Open, or Ended, AND totalParticipants == 0, AND no
-     *      settlement has been published for this campaign on either the ERC20 or NFT path.
+     *      Merkle root has been published for this campaign on either the ERC20 or NFT path.
+     *      Tiered (RANK_TIERED/SCORE_TIERED) campaigns lock their mode at Draft (setRankTiers/
+     *      setScoreTiers), so they are NOT excluded by mode alone -- every tiered claim requires the
+     *      participant be currently qualified, which only a real completion can set, and the first
+     *      completion increments totalParticipants. So for tiered, totalParticipants == 0 already
+     *      proves nothing is claimable. This relies on the pinned OnChainRewardModule enforcing
+     *      qualification on BOTH tiered paths (the fixed module does; a pre-fix module did not on
+     *      SCORE_TIERED).
      *      totalParticipants == 0 alone is NOT sufficient once Ended is in scope: totalParticipants
      *      only tracks completeTask engagement and is entirely decoupled from Merkle settlement --
      *      a campaign that allocates purely from an off-chain allowlist can have real, claimable
@@ -633,11 +640,10 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.totalParticipants != 0) {
             revert Web3Campaigns__CampaignHasParticipants();
         }
-        // Structurally impossible to fail while Draft/Open (both settlement paths require Ended),
-        // so this only ever bites the Ended case -- exactly where it's needed. Also catches a
-        // settler-published root (a fallback publish locks the ERC20 mode / sets the NFT root
-        // exactly like a host publish does), so a returning host can never cancel out from under one.
-        if (_erc20SettlementMode[_campaignId] != ERC20SettlementMode.UNSET) {
+        // Merkle allocations are decoupled from totalParticipants, so a published root (host or
+        // settler) blocks cancel outright. MERKLE only locks via root publication, which requires
+        // Ended. Tiered modes fall through to the totalParticipants gate above.
+        if (_erc20SettlementMode[_campaignId] == ERC20SettlementMode.MERKLE) {
             revert Web3Campaigns__CampaignNotCancellable();
         }
         if (_nftSettlementPublished(_campaignId)) {
@@ -654,9 +660,9 @@ contract CampaignManagement is CampaignStorage {
     /// @dev Silently refunds any escrowed-but-undistributed ERC20 to the host and marks the
     /// campaign swept, without reverting if there's nothing configured/escrowed to refund (unlike
     /// the explicit withdrawUnclaimedERC20, which is meant to be called standalone and should be
-    /// noisy about a no-op). Distributed is guaranteed 0 here since cancelCampaign's own guard
-    /// requires ERC20SettlementMode.UNSET -- no root/tiered mode was ever committed, so no claim
-    /// was ever possible.
+    /// noisy about a no-op). Distributed is 0 here: cancelCampaign rejects a published Merkle root,
+    /// and a tiered claim requires a qualified (hence counted) participant, which cancel also
+    /// rejects. Refunding escrowed - distributed stays solvent regardless.
     function _refundERC20IfAny(uint256 _campaignId) internal returns (uint256 refunded) {
         if (_erc20Swept[_campaignId]) {
             return 0;

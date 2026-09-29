@@ -948,6 +948,117 @@ contract OnChainRewardModuleTest is Test {
         assertEq(token.balanceOf(participant1), 0);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                    CANCEL: TIERED CAMPAIGNS (zero participants)
+    //////////////////////////////////////////////////////////////*/
+
+    uint8 constant STAGE_DRAFT = 0;
+    uint8 constant STAGE_OPEN = 1;
+    uint8 constant STAGE_ENDED = 2;
+
+    /// @dev Tiered campaign with one required task, escrow funded, advanced to `stage`. SCORE tiers
+    /// include a minScore-0 floor so a stranger claim would pay if qualification weren't enforced.
+    function _tieredCampaignAt(bool score, uint8 stage) internal returns (uint256 id, uint256 endTime) {
+        uint256 startTime;
+        (id, startTime, endTime) = _draftCampaign();
+        _addSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 10 ether;
+        if (score) {
+            _setScoreTiers(id, new uint256[](1), amounts);
+        } else {
+            uint256[] memory startRanks = new uint256[](1);
+            uint256[] memory endRanks = new uint256[](1);
+            startRanks[0] = 1;
+            endRanks[0] = 1;
+            vm.prank(host1);
+            module.setRankTiers(id, startRanks, endRanks, amounts);
+        }
+        _fundEscrow(id, 10 ether);
+
+        if (stage >= STAGE_OPEN) _openCampaign(id, startTime);
+        if (stage >= STAGE_ENDED) _endCampaign(id, endTime);
+    }
+
+    function _assertTieredCancelRefunds(bool score, uint8 stage) internal {
+        (uint256 id,) = _tieredCampaignAt(score, stage);
+        uint256 hostBefore = token.balanceOf(host1);
+
+        vm.prank(host1);
+        campaigns.cancelCampaign(id);
+
+        assertEq(uint8(campaigns.getCampaign(id).status), uint8(CampaignStorage.CampaignStatus.Cancelled));
+        assertEq(token.balanceOf(host1), hostBefore + 10 ether, "full immediate refund");
+    }
+
+    function test_CancelTiered_Rank_ZeroParticipants_Draft() public {
+        _assertTieredCancelRefunds(false, STAGE_DRAFT);
+    }
+
+    function test_CancelTiered_Rank_ZeroParticipants_Open() public {
+        _assertTieredCancelRefunds(false, STAGE_OPEN);
+    }
+
+    function test_CancelTiered_Rank_ZeroParticipants_Ended() public {
+        _assertTieredCancelRefunds(false, STAGE_ENDED);
+    }
+
+    function test_CancelTiered_Score_ZeroParticipants_Draft() public {
+        _assertTieredCancelRefunds(true, STAGE_DRAFT);
+    }
+
+    function test_CancelTiered_Score_ZeroParticipants_Open() public {
+        _assertTieredCancelRefunds(true, STAGE_OPEN);
+    }
+
+    function test_CancelTiered_Score_ZeroParticipants_Ended() public {
+        _assertTieredCancelRefunds(true, STAGE_ENDED);
+    }
+
+    function _assertTieredCancelBlockedByParticipant(bool score) internal {
+        (uint256 id, uint256 endTime) = _tieredCampaignAt(score, STAGE_OPEN);
+        vm.prank(participant1);
+        campaigns.completeTask(id, 0);
+        _endCampaign(id, endTime);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignHasParticipants.selector);
+        vm.prank(host1);
+        campaigns.cancelCampaign(id);
+    }
+
+    function test_CancelTiered_Rank_WithParticipant_Reverts() public {
+        _assertTieredCancelBlockedByParticipant(false);
+    }
+
+    function test_CancelTiered_Score_WithParticipant_Reverts() public {
+        _assertTieredCancelBlockedByParticipant(true);
+    }
+
+    function _assertCancelledTieredBlocksClaims(bool score) internal {
+        (uint256 id,) = _tieredCampaignAt(score, STAGE_ENDED);
+        vm.prank(host1);
+        campaigns.cancelCampaign(id);
+
+        address stranger = makeAddr("stranger");
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotYetEnded.selector);
+        vm.prank(stranger);
+        module.claimReward(id);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignNotYetEnded.selector);
+        module.claimRewardFor(id, stranger);
+    }
+
+    function test_CancelTiered_Rank_CancelledBlocksClaims() public {
+        _assertCancelledTieredBlocksClaims(false);
+    }
+
+    function test_CancelTiered_Score_CancelledBlocksClaims() public {
+        _assertCancelledTieredBlocksClaims(true);
+    }
+
     function _attestationDigest(
         uint256 campaignId,
         address participant,
