@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.31;
 
-import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
+import {AttestationHelper} from "./utils/AttestationHelper.sol";
 import {CampaignStorage} from "../src/CampaignStorage.sol";
 import {NFTSettlementModule} from "../src/NFTSettlementModule.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -16,7 +16,7 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 /// NFTSettlementModule.withdrawUnclaimedERC721/1155 (bypassing the grace period once Cancelled).
 /// Ended is included so a keeper's permissionless endCampaign call can't strip a
 /// zero-participant/zero-settlement campaign's host of their immediate refund.
-contract CancelCampaignTest is Test {
+contract CancelCampaignTest is AttestationHelper {
     Web3Campaigns public campaigns;
     ERC20Mock public token;
     NFTSettlementModule public nftModule;
@@ -25,13 +25,14 @@ contract CancelCampaignTest is Test {
     address public host1;
     address public participant1;
 
+    uint256 constant SIGNER_PK = 1; // deployer = vm.addr(SIGNER_PK) holds SIGNER_ROLE by default
     uint256 constant START_OFFSET = 1 days;
     uint256 constant CAMPAIGN_DURATION = 7 days;
 
     function setUp() public {
         vm.warp(1_000_000);
 
-        deployer = vm.addr(1);
+        deployer = vm.addr(SIGNER_PK);
         host1 = vm.addr(2);
         participant1 = vm.addr(4);
 
@@ -224,8 +225,7 @@ contract CancelCampaignTest is Test {
         campaigns.openCampaign(id);
 
         // participant1 does the (free) work in good faith.
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         // Host can no longer bail out to dodge paying a reward -- must run the campaign to
         // completion (Ended -> Closed) instead.
@@ -248,8 +248,7 @@ contract CancelCampaignTest is Test {
         vm.prank(host1);
         campaigns.openCampaign(id);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         vm.warp(endTime + 1);
         vm.prank(host1);

@@ -26,9 +26,11 @@ contract ParticipantManagement is CampaignStorage {
     }
 
     /**
-     * @dev Allows a participant to mark a task as completed.
-     * For off-chain tasks, this is a self-assertion that the host will later verify.
-     * For on-chain tasks, this function performs direct on-chain verification.
+     * @dev Self-verification for ONCHAIN_HOLD_ERC20 / ONCHAIN_HOLD_ERC721 tasks only: the balance or
+     *      ownership is checked on-chain against msg.sender. Every other task type reverts
+     *      NotSelfVerifiable -- it can only be settled by a SIGNER_ROLE attestation
+     *      (verifyTaskCompletionWithSignature), so a participant can never self-assert a social,
+     *      wallet-connect, humanity or on-chain-tx task.
      * @param _campaignId The ID of the campaign.
      * @param _taskIndex The index of the task within the campaign's tasks array.
      */
@@ -91,15 +93,9 @@ contract ParticipantManagement is CampaignStorage {
             if (IERC721(tokenAddress).ownerOf(tokenId) != msg.sender) {
                 revert Web3Campaigns__NotHoldingSpecificERC721();
             }
-        } else if (currentTask.taskType == TaskType.ONCHAIN_TX) {
-            // A specific on-chain transaction cannot be self-asserted here without an
-            // oracle/proof system. It is instead settled via a signed attestation
-            // (verifyTaskCompletionWithSignature), so we block self-completion rather
-            // than hard-reverting the whole task type (which would brick claims for any
-            // campaign that includes a mandatory ONCHAIN_TX task).
+        } else {
             revert Web3Campaigns__NotSelfVerifiable();
         }
-        // For other social tasks, this remains a self-assertion, requiring host verification.
 
         // Mark task as completed for the participant
         _participantTaskCompletion[msg.sender][_campaignId][_taskIndex] = true;
