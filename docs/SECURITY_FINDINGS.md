@@ -47,7 +47,7 @@ N-of-M threshold signing, sybil gating (humanity-module design agreed, not yet b
 - **`SIGNER_ROLE` key compromise** — a compromised signer can mint arbitrary task completions until revoked via `revokeRole(SIGNER_ROLE, ...)`. There is no on-chain rate limit or threshold; single-signer by design. Rotate quickly if compromised. See [TASK_VERIFICATION.md](TASK_VERIFICATION.md).
 - **Zero-address participant guard** — `verifyTaskCompletionWithSignature` explicitly rejects `_participant == address(0)` (`Web3Campaigns__ZeroAddress`).
 - **Signature replay/update model** — per-`(participant,campaign,task)` version counter; replay is impossible because the accepted version is advanced atomically. A signer *can* flip `completed` back to `false` by signing the next version — intentional (correction/re-verification path), but means partial completion counts may decrease for any off-chain aggregation that queries task state.
-- **`completeTask` guard** — if any attestation has ever been accepted for a `(participant, campaign, task)` triple (`version > 0`), `completeTask` reverts `TaskManagedBySignature` to prevent mixing self-assertion and signer-controlled state.
+- **`completeTask` guard** — if any attestation has ever been accepted for a `(participant, campaign, task)` triple (`version > 0`), `completeTask` reverts `TaskManagedBySignature` to prevent mixing self-assertion and signer-controlled state. **(Superseded: `completeTask` now rejects every non-hold task outright, and hold tasks can never be attested, so this guard no longer gates any reachable case. See the `fix/self-assert-tasks` entry.)**
 - **Domain binding** — `verifyingContract` is encoded in the EIP-712 domain, so a signature produced for one deployment cannot validate against another. Tested in `test/SignatureVerification.t.sol`.
 
 ## New surface added in B1–B2 (review focus)
@@ -222,6 +222,38 @@ Both checks reuse the existing `Web3Campaigns__CampaignNotCancellable` error rat
 **Tests** (`test/OnChainRewardModule.t.sol`, +10): zero-participant cancel with immediate full refund for RANK and SCORE in each of Draft, Open, and Ended (6 tests); a tiered campaign with a participant still reverts `CampaignHasParticipants` (RANK and SCORE); a cancelled tiered campaign blocks `claimReward`/`claimRewardFor` (RANK and SCORE). The existing Merkle- and NFT-root rug-pull regressions (`test/CancelCampaign.t.sol`) and the settler-root cancel tests (`test/SettlerFallback.t.sol`) pass unchanged. Negative control: restoring `!= UNSET` makes all 8 cancel-success tests fail with `CampaignNotCancellable`. No invariant suite exercises `cancelCampaign`, so none needed updating.
 
 **Gate.** 258/258 tests (baseline 244). `forge fmt --check` clean. Slither 293 results on both this branch and `dev`, with identical detector and location breakdowns. Aderyn High 1 / Low 15 on both, identical. **Needs a redeploy (of both contracts) to take effect; it does nothing for already-deployed campaigns.**
+
+## ✅ FIXED (CRITICAL) — `completeTask` let participants self-assert every non-hold task (`fix/self-assert-tasks`)
+
+**The bug.** `completeTask` ran on-chain checks only for `ONCHAIN_HOLD_ERC20`/`ONCHAIN_HOLD_ERC721` and reverted `NotSelfVerifiable` only for `ONCHAIN_TX`. Every other type fell through to a comment ("this remains a self-assertion, requiring host verification") and was marked complete with no check: `SOCIAL_FOLLOW`/`LIKE`/`RETWEET`/`POST`, `DISCORD_JOIN` (also used for Telegram), `WALLET_CONNECT` and `HUMANITY_VERIFICATION`. The host-verification step that comment referred to was removed in Phase 2. The only remaining guard was `TaskManagedBySignature`, which only bites once an attestation exists, so it never applied to a wallet the signer had not touched. The signed-attestation path was meant to be the **only** way to settle non-hold tasks ([TASK_VERIFICATION.md](TASK_VERIFICATION.md), frontend `DECISIONS_v0.6.0` Decision 2), but the contract never enforced it.
+
+**Repro (verified on `fix/tiered-cancel`, before this fix).** A SCORE_TIERED campaign with a required `HUMANITY_VERIFICATION` task (index 0), an optional 10-point social task (index 1), and a single tier minScore 10 → 100 ether, funded and opened. `participant1` calls `completeTask(id, 1)`, waits 31s, then calls `completeTask(id, 0)`, with no signer involved at all. After `endCampaign`, `module.claimReward(id)` paid the full 100 ether.
+
+**Impact.**
+- **Tiered (RANK and SCORE):** any wallet could self-complete every required task, become qualified, and claim. This defeated PR #23's SCORE qualification fix and any humanity gate. Rank tiers could be farmed by sybil wallets racing for top ranks; score tiers paid every sybil.
+- **Merkle:** the backend allocation (frontend `src/lib/allocation.ts`) qualifies wallets by on-chain task completion, so any wallet could self-complete every non-hold task and earn a leaf.
+- **Humanity gating:** a required `HUMANITY_VERIFICATION` task could be self-asserted, so the on-chain half of [HUMANITY_GATING.md](HUMANITY_GATING.md)'s tiered enforcement did not hold.
+
+**Fix.** `completeTask` now accepts only the two hold types; every other `TaskType` reverts `Web3Campaigns__NotSelfVerifiable` (the existing error, which subsumes the old `ONCHAIN_TX` special case). There were no other self-assertion paths: the only writers of `_participantTaskCompletion` (and the only callers of `_notifyModuleOfCompletion`) are `completeTask` and `_verifySingleTaskCompletion`. The attestation path is unchanged, and hold tasks remain signer-unoverridable (`TaskNotVerifiableByHost`). Side effect: the moderator `flagAccount` gate and the 30s anti-spam cooldown live in `completeTask`, so they now only apply to hold tasks. Non-hold completions are gated by the signer backend.
+
+**Size.** `Web3Campaigns` runtime 24,572B → **24,561B (−11B, 15B headroom)**, measured with PR #23 included.
+
+**Tests** (258 → 267).
+- New `test/CompleteTaskSelfVerification.t.sol` (+7):
+  - every non-hold `TaskType` reverts `NotSelfVerifiable` (an exhaustive loop plus a fuzz test)
+  - hold ERC20/ERC721 self-verify, with positive and negative cases
+  - a hold task can't be attested (complete or revoke), its attestation version never moves, and `TaskManagedBySignature` never locks it
+- `test/OnChainRewardModule.t.sol` (+2):
+  - the exact repro above now reverts at both `completeTask` calls, and the claim fails
+  - an attested social task plus humanity task still counts toward score, rank, qualification and `totalParticipants`, and the claim pays
+- `test_CompleteTask_SelfAssertPreAttestationWorks` was inverted into `test_CompleteTask_SocialTaskNotSelfVerifiable`.
+- Every test that used `completeTask` on a social task as a shortcut now submits a real signed attestation through a shared `test/utils/AttestationHelper.sol`. The `completeTask` participant-cap and `flagAccount` tests moved to hold tasks so they still exercise `completeTask`. `DeploymentSmoke` grants `SIGNER_ROLE` to a `makeAddrAndKey` backend signer, the way a real deployment would.
+- `OnChainRewardHandler` now completes tasks via attestation. Checked for vacuity with a temporary invariant asserting no claim ever succeeds; it failed (claims did succeed).
+- Negative control: restoring the fall-through makes 4 regression tests fail.
+
+**Gate.** `forge fmt --check` clean. Slither: 293 results on both this branch and `fix/tiered-cancel`, with identical detectors and locations. Aderyn: High 1 / Low 15 on both, identical.
+
+**Deployment / frontend.** Needs the same redeploy as PR #23; already-deployed contracts keep the bug. After the redeploy, no participant UI may call `completeTask` for a non-hold task, because it will revert. The frontend's only UI caller is already hold-only, but `web3-service.ts`'s `completeTask` wrapper still has a non-hold branch, and several frontend docs describe client-side `completeTask` for social or humanity tasks.
 
 ## Dropped (2026-07-19) — participant-cap-check gas hoist, reverted for headroom
 
