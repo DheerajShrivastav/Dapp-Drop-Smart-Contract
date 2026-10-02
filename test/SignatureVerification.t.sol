@@ -304,13 +304,15 @@ contract SignatureVerificationTest is Test {
                     SIGNER AUTHORITY / SELF-ASSERTION LOCK
     //////////////////////////////////////////////////////////////*/
 
-    function test_CompleteTask_SelfAssertPreAttestationWorks() public {
+    /// @notice Regression: a social task used to be self-assertable before any attestation existed.
+    function test_CompleteTask_SocialTaskNotSelfVerifiable() public {
         uint256 campaignId = _openCampaignWithSocialTask();
 
         vm.prank(participant1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotSelfVerifiable.selector);
         campaigns.completeTask(campaignId, 0);
 
-        assertTrue(campaigns.hasCompletedTask(campaignId, participant1, 0));
+        assertFalse(campaigns.hasCompletedTask(campaignId, participant1, 0));
     }
 
     function test_CompleteTask_AfterSignerRevoke_RevertsWithTaskManagedBySignature() public {

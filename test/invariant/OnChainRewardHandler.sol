@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.31;
 
-import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../../src/Web3Campaigns.sol";
 import {OnChainRewardModule} from "../../src/OnChainRewardModule.sol";
 import {CampaignStorage} from "../../src/CampaignStorage.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {AttestationHelper} from "../utils/AttestationHelper.sol";
 
 /// @notice Stateful-fuzz handler for the on-chain RANK_TIERED settlement path + per-campaign module
 ///         pinning, across MANY campaigns and a rotating global reward module.
@@ -26,13 +26,14 @@ import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 /// retry the same (campaign, participant) claim repeatedly. Success is counted every time via
 /// claimAttemptsSucceeded, so invariant_claimAtMostOncePerParticipant actually exercises the
 /// contract's own double-claim guard rather than just trusting the handler never asks twice.
-contract OnChainRewardHandler is Test {
+contract OnChainRewardHandler is AttestationHelper {
     uint256 internal constant NUM_PARTICIPANTS = 4;
 
     Web3Campaigns public campaigns;
     ERC20Mock public token;
     OnChainRewardModule public currentModule; // whichever module is currently the global default
     address public deployer;
+    uint256 internal immutable SIGNER_PK; // deployer's key; deployer holds SIGNER_ROLE
 
     address[4] public participants;
 
@@ -48,11 +49,18 @@ contract OnChainRewardHandler is Test {
     uint256 public ghost_totalFunded;
     uint256 public ghost_totalClaimed;
 
-    constructor(Web3Campaigns _campaigns, ERC20Mock _token, OnChainRewardModule _initialModule, address _deployer) {
+    constructor(
+        Web3Campaigns _campaigns,
+        ERC20Mock _token,
+        OnChainRewardModule _initialModule,
+        address _deployer,
+        uint256 _signerPk
+    ) {
         campaigns = _campaigns;
         token = _token;
         currentModule = _initialModule;
         deployer = _deployer;
+        SIGNER_PK = _signerPk;
 
         participants[0] = address(0xA11CE);
         participants[1] = address(0xB0B01);
@@ -98,20 +106,19 @@ contract OnChainRewardHandler is Test {
         tierAmountOf[id] = tierAmount;
         openCampaigns.push(id);
 
-        // Land inside the campaign's active window for the earliest completeTask calls.
+        // Land inside the campaign's active window before any attestations.
         vm.warp(startTime + 1);
     }
 
-    /// @dev A participant self-completes the campaign's single required task.
+    /// @dev The signer attests a participant's completion of the campaign's single required task
+    /// (non-hold tasks can only be completed by attestation).
     function complete(uint256 campaignSeed, uint256 participantSeed) external {
         if (openCampaigns.length == 0) return;
         uint256 id = openCampaigns[bound(campaignSeed, 0, openCampaigns.length - 1)];
         uint256 idx = bound(participantSeed, 0, NUM_PARTICIPANTS - 1);
         if (completedInCampaign[id][idx]) return;
 
-        vm.warp(block.timestamp + 31); // clear the participant's 30s anti-spam cooldown
-        vm.prank(participants[idx]);
-        campaigns.completeTask(id, 0); // reverts (e.g. window elapsed) are discarded, ghosts untouched
+        _attestTask(campaigns, SIGNER_PK, id, participants[idx], 0, true);
 
         completedInCampaign[id][idx] = true;
     }

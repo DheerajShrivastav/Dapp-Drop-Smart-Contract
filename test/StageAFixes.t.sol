@@ -240,7 +240,10 @@ contract StageAFixesTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_FlagAccount_BlocksCompleteTask() public {
-        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.SOCIAL_FOLLOW, "", false);
+        uint256 campaignId = _openCampaignWithTask(
+            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, abi.encode(address(mockERC20), uint256(1)), false
+        );
+        mockERC20.mint(participant1, 1);
 
         vm.prank(deployer); // deployer holds MODERATOR_ROLE
         campaigns.flagAccount(participant1, 100); // == MAX_SUSPICIOUS_SCORE
@@ -257,7 +260,10 @@ contract StageAFixesTest is Test {
     }
 
     function test_FlagAccount_CanClear() public {
-        uint256 campaignId = _openCampaignWithTask(CampaignStorage.TaskType.SOCIAL_FOLLOW, "", false);
+        uint256 campaignId = _openCampaignWithTask(
+            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, abi.encode(address(mockERC20), uint256(1)), false
+        );
+        mockERC20.mint(participant1, 1);
 
         vm.prank(deployer);
         campaigns.flagAccount(participant1, 100);

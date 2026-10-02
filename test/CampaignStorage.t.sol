@@ -462,8 +462,20 @@ contract CampaignLifecycleTest is Test {
         campaigns.setMaxParticipants(campaignId, tooHigh);
     }
 
+    function _openCampaignWithHoldTask() internal returns (uint256 campaignId) {
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.prank(host1);
+        campaignId = campaigns.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(
+            campaignId, CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20, "Hold", abi.encode(address(mockERC20), 1), false
+        );
+        mockERC20.mint(participant1, 1);
+        mockERC20.mint(participant2, 1);
+    }
+
     function test_CompleteTask_RevertsOncePerCampaignParticipantLimitReached() public {
-        uint256 campaignId = _openCampaignWithTask();
+        uint256 campaignId = _openCampaignWithHoldTask();
         vm.prank(host1);
         campaigns.setMaxParticipants(campaignId, 1);
 
@@ -484,9 +496,15 @@ contract CampaignLifecycleTest is Test {
     /// @dev The cap blocks NEW participants only -- a wallet already counted can complete further
     /// tasks in the same campaign without being blocked by its own earlier participation.
     function test_CompleteTask_CapDoesNotBlockAnAlreadyCountedParticipant() public {
-        uint256 campaignId = _openCampaignWithTask();
+        uint256 campaignId = _openCampaignWithHoldTask();
         vm.prank(host1);
-        campaigns.addTaskToCampaign(campaignId, CampaignStorage.TaskType.SOCIAL_LIKE, "Like our post", "", false);
+        campaigns.addTaskToCampaign(
+            campaignId,
+            CampaignStorage.TaskType.ONCHAIN_HOLD_ERC20,
+            "Hold more",
+            abi.encode(address(mockERC20), 1),
+            false
+        );
         vm.prank(host1);
         campaigns.setMaxParticipants(campaignId, 1);
 

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.31;
 
-import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
 import {OnChainRewardModule} from "../src/OnChainRewardModule.sol";
 import {CampaignStorage} from "../src/CampaignStorage.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {AttestationHelper} from "./utils/AttestationHelper.sol";
 
 /// @notice Covers the two-contract on-chain reward tier architecture: Web3Campaigns (fund
 /// custody + core campaign state) paired with the standalone OnChainRewardModule (rank/score
 /// bookkeeping, tier config, claim computation), wired together via setOnChainRewardModule /
 /// setSettlementMode / notifyTaskCompletion / payOnChainReward.
-contract OnChainRewardModuleTest is Test {
+contract OnChainRewardModuleTest is AttestationHelper {
     Web3Campaigns public campaigns;
     OnChainRewardModule public module;
     ERC20Mock public token;
@@ -22,13 +22,14 @@ contract OnChainRewardModuleTest is Test {
     address public participant2;
     address public participant3;
 
+    uint256 constant SIGNER_PK = 1; // deployer = vm.addr(SIGNER_PK) holds SIGNER_ROLE by default
     uint256 constant START_OFFSET = 1 days;
     uint256 constant CAMPAIGN_DURATION = 7 days;
 
     function setUp() public {
         vm.warp(1_000_000);
 
-        deployer = vm.addr(1);
+        deployer = vm.addr(SIGNER_PK);
         host1 = vm.addr(2);
         participant1 = vm.addr(3);
         participant2 = vm.addr(4);
@@ -113,10 +114,8 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 120 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
-        vm.prank(participant2);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
+        _attestTask(campaigns, SIGNER_PK, id, participant2, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -153,8 +152,7 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 50 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -227,17 +225,12 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 120 ether);
         _openCampaign(id, startTime);
 
-        // participant1 completes both tasks -> score 30 -> top tier. completeTask enforces a 30s
-        // per-user anti-spam cooldown, so the two completions must straddle it.
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
-        vm.warp(block.timestamp + 31);
-        vm.prank(participant1);
-        campaigns.completeTask(id, 1);
+        // participant1 completes both tasks -> score 30 -> top tier.
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 1, true);
 
         // participant2 completes only the first task -> score 10 -> second tier.
-        vm.prank(participant2);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant2, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -276,8 +269,7 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 100 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -571,17 +563,10 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 50 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         // Signer revokes the completion via a signed attestation (completed = false).
-        uint256 deadline = block.timestamp + 1 hours;
-        uint256 version = 1; // first attestation for this (participant, campaign, task)
-        bytes32 digest = _attestationDigest(id, participant1, 0, false, version, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest); // deployer holds SIGNER_ROLE by default
-        bytes memory sig = abi.encodePacked(r, s, v);
-
-        campaigns.verifyTaskCompletionWithSignature(id, participant1, 0, false, deadline, sig);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, false);
 
         _endCampaign(id, endTime);
 
@@ -649,17 +634,12 @@ contract OnChainRewardModuleTest is Test {
         _openCampaign(id, startTime);
 
         // Complete -> score credited (+10).
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
         (,, uint256 scoreAfterComplete,,) = module.getOnChainRewardStatus(id, participant1);
         assertEq(scoreAfterComplete, 10);
 
         // Signer revokes the same task -> checked `-= points` runs.
-        uint256 deadline = block.timestamp + 1 hours;
-        bytes32 digest = _attestationDigest(id, participant1, 0, false, 1, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest); // deployer holds SIGNER_ROLE by default
-        bytes memory sig = abi.encodePacked(r, s, v);
-        campaigns.verifyTaskCompletionWithSignature(id, participant1, 0, false, deadline, sig);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, false);
 
         (,, uint256 scoreAfterRevoke,,) = module.getOnChainRewardStatus(id, participant1);
         assertEq(scoreAfterRevoke, 0);
@@ -695,8 +675,7 @@ contract OnChainRewardModuleTest is Test {
         campaigns.setOnChainRewardModule(address(b));
 
         // The completion must be recorded by the pinned module A...
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         (, uint256 rankA,, bool qualifiedA,) = module.getOnChainRewardStatus(id, participant1);
         assertEq(rankA, 1);
@@ -734,21 +713,15 @@ contract OnChainRewardModuleTest is Test {
         _openCampaign(id, startTime);
 
         // participant1 completes both tasks; they become qualified (rank 1)
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
         vm.warp(block.timestamp + 5 minutes + 1);
-        vm.prank(participant1);
-        campaigns.completeTask(id, 1);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 1, true);
 
         (,,, bool qualifiedBefore,) = module.getOnChainRewardStatus(id, participant1);
         assertTrue(qualifiedBefore);
 
         // Signer revokes the OPTIONAL task; participant1 still has the required task
-        uint256 deadline = block.timestamp + 1 hours;
-        bytes32 digest = _attestationDigest(id, participant1, 1, false, 1, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
-        bytes memory sig = abi.encodePacked(r, s, v);
-        campaigns.verifyTaskCompletionWithSignature(id, participant1, 1, false, deadline, sig);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 1, false);
 
         // Qualification must survive — only the optional task was revoked
         (,,, bool qualifiedAfter,) = module.getOnChainRewardStatus(id, participant1);
@@ -783,8 +756,7 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 50 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -866,8 +838,7 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 100 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 1); // optional, score 10, humanity task still missing
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 1, true);
 
         _endCampaign(id, endTime);
 
@@ -901,8 +872,7 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 105 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
 
         _endCampaign(id, endTime);
 
@@ -930,15 +900,11 @@ contract OnChainRewardModuleTest is Test {
         _fundEscrow(id, 105 ether);
         _openCampaign(id, startTime);
 
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
         (,,, bool qualifiedBefore,) = module.getOnChainRewardStatus(id, participant1);
         assertTrue(qualifiedBefore);
 
-        uint256 deadline = block.timestamp + 1 hours;
-        bytes32 digest = _attestationDigest(id, participant1, 0, false, 1, deadline);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(1, digest);
-        campaigns.verifyTaskCompletionWithSignature(id, participant1, 0, false, deadline, abi.encodePacked(r, s, v));
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, false);
 
         _endCampaign(id, endTime);
 
@@ -1020,8 +986,7 @@ contract OnChainRewardModuleTest is Test {
 
     function _assertTieredCancelBlockedByParticipant(bool score) internal {
         (uint256 id, uint256 endTime) = _tieredCampaignAt(score, STAGE_OPEN);
-        vm.prank(participant1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
         _endCampaign(id, endTime);
 
         vm.expectRevert(CampaignStorage.Web3Campaigns__CampaignHasParticipants.selector);
@@ -1057,6 +1022,81 @@ contract OnChainRewardModuleTest is Test {
 
     function test_CancelTiered_Score_CancelledBlocksClaims() public {
         _assertCancelledTieredBlocksClaims(true);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+          SELF-ASSERTION REMOVED: non-hold tasks are attestation-only
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev SCORE_TIERED campaign: required HUMANITY_VERIFICATION (index 0) + optional 10-point
+    /// social task (index 1); one tier minScore 10 -> 100 ether. Funded and opened.
+    function _humanityGatedScoreCampaign() internal returns (uint256 id, uint256 endTime) {
+        uint256 startTime;
+        (id, startTime, endTime) = _draftCampaign();
+        vm.prank(host1);
+        campaigns.addTaskToCampaign(id, CampaignStorage.TaskType.HUMANITY_VERIFICATION, "Human", "", false);
+        _addOptionalSocialTask(id);
+        vm.prank(host1);
+        campaigns.configureERC20Reward(id, address(token));
+        _setPoints(id, 1, 10);
+
+        uint256[] memory minScores = new uint256[](1);
+        uint256[] memory amounts = new uint256[](1);
+        minScores[0] = 10;
+        amounts[0] = 100 ether;
+        _setScoreTiers(id, minScores, amounts);
+
+        _fundEscrow(id, 100 ether);
+        _openCampaign(id, startTime);
+    }
+
+    /// @notice Regression for the exact reported repro: participant self-completed the optional
+    /// social task AND the required humanity task with no signer involvement, then claimed the full
+    /// 100 ether. Both self-completions must now revert and the claim must fail.
+    function test_SelfAssertBypass_HumanityAndSocialRevert_ClaimFails() public {
+        (uint256 id, uint256 endTime) = _humanityGatedScoreCampaign();
+
+        vm.prank(participant1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotSelfVerifiable.selector);
+        campaigns.completeTask(id, 1);
+
+        vm.warp(block.timestamp + 31);
+        vm.prank(participant1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotSelfVerifiable.selector);
+        campaigns.completeTask(id, 0);
+
+        _endCampaign(id, endTime);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__NotFullyCompleted.selector);
+        vm.prank(participant1);
+        module.claimReward(id);
+
+        assertEq(token.balanceOf(participant1), 0);
+        assertEq(campaigns.getCampaign(id).totalParticipants, 0);
+    }
+
+    /// @notice The legitimate path still works end to end: signer-attested humanity + social tasks
+    /// count toward score, rank, qualification and totalParticipants, and the claim pays.
+    function test_AttestedSocialAndHumanity_CountForScoreRankQualification() public {
+        (uint256 id, uint256 endTime) = _humanityGatedScoreCampaign();
+
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 1, true);
+        (, uint256 rankMid, uint256 scoreMid, bool qualifiedMid,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(scoreMid, 10);
+        assertEq(rankMid, 0);
+        assertFalse(qualifiedMid, "humanity still missing");
+
+        _attestTask(campaigns, SIGNER_PK, id, participant1, 0, true);
+        (, uint256 rank, uint256 score, bool qualified,) = module.getOnChainRewardStatus(id, participant1);
+        assertEq(score, 10);
+        assertEq(rank, 1);
+        assertTrue(qualified);
+        assertEq(campaigns.getCampaign(id).totalParticipants, 1);
+
+        _endCampaign(id, endTime);
+        vm.prank(participant1);
+        module.claimReward(id);
+        assertEq(token.balanceOf(participant1), 100 ether);
     }
 
     function _attestationDigest(

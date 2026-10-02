@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.31;
 
-import {Test} from "forge-std/Test.sol";
 import {DeployWeb3Campaigns} from "../script/DeployWeb3Campaigns.s.sol";
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
+import {AttestationHelper} from "./utils/AttestationHelper.sol";
 import {CampaignStorage} from "../src/CampaignStorage.sol";
 import {OnChainRewardModule} from "../src/OnChainRewardModule.sol";
 import {NFTSettlementModule} from "../src/NFTSettlementModule.sol";
@@ -20,7 +20,7 @@ import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 /// a half-dead system: NFT deposits and tiered rewards revert with no module registered, and
 /// withdrawETH reverts with no treasury set. Nothing in the suite caught that, because every other
 /// test wires the modules up by hand in its own setUp.
-contract DeploymentSmokeTest is Test {
+contract DeploymentSmokeTest is AttestationHelper {
     bytes32 constant DEFAULT_ADMIN_ROLE = 0x00;
 
     DeployWeb3Campaigns public deployScript;
@@ -205,8 +205,13 @@ contract DeploymentSmokeTest is Test {
         vm.prank(host1);
         campaigns.openCampaign(id);
 
-        vm.prank(p1);
-        campaigns.completeTask(id, 0);
+        // Non-hold tasks settle only via a SIGNER_ROLE attestation; grant the role to a backend
+        // signer key exactly as a real deployment's admin would.
+        (address backendSigner, uint256 backendSignerPk) = makeAddrAndKey("backendSigner");
+        bytes32 signerRole = campaigns.SIGNER_ROLE();
+        vm.prank(address(deployScript));
+        campaigns.grantRole(signerRole, backendSigner);
+        _attestTask(campaigns, backendSignerPk, id, p1, 0, true);
 
         vm.warp(endTime + 1);
         vm.prank(host1);
