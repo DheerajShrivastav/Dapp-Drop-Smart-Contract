@@ -50,6 +50,8 @@ install:
 #   FEE_BPS           protocol fee, 0 = fees disabled (default: 0, no FeeModule deployed)
 #   FEE_ADMIN         FeeModule admin                 (default: deployer)
 #   FEE_TREASURY      protocol-fee destination        (default: TREASURY_ADDRESS)
+#   SIGNER_ADDRESS    sole SIGNER_ROLE holder         (default: deployer)
+#   SETTLER_ADDRESS   sole SETTLER_ROLE holder        (default: deployer)
 
 # Simulate the deployment without broadcasting. Run this first, every time.
 deploy-sepolia-dry:

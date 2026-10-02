@@ -49,7 +49,7 @@ contract DeploymentSmokeTest is AttestationHelper {
         deployScript = new DeployWeb3Campaigns();
         // Fees disabled (feeBps = 0) -- the intended beta default, and what `make deploy-sepolia`
         // produces with no FEE_BPS in the environment.
-        DeployWeb3Campaigns.Deployment memory d = deployScript.deploy(treasury, 0, address(0), address(0));
+        DeployWeb3Campaigns.Deployment memory d = deployScript.deploy(_config(0, address(0), address(0)));
         campaigns = d.campaigns;
         rewardModule = d.rewardModule;
         nftModule = d.nftModule;
@@ -91,7 +91,7 @@ contract DeploymentSmokeTest is AttestationHelper {
         address feeAdmin = vm.addr(51);
         address feeTreasury = vm.addr(52);
 
-        DeployWeb3Campaigns.Deployment memory d = deployScript.deploy(treasury, 250, feeAdmin, feeTreasury);
+        DeployWeb3Campaigns.Deployment memory d = deployScript.deploy(_config(250, feeAdmin, feeTreasury));
 
         assertTrue(address(d.feeModule) != address(0));
         assertEq(d.campaigns.getFeeModule(), address(d.feeModule));
@@ -235,5 +235,166 @@ contract DeploymentSmokeTest is AttestationHelper {
         campaigns.withdrawETH();
 
         assertEq(treasury.balance - before, 1 ether);
+    }
+
+    /// @dev Default config as run() would build it with no role env vars: the script contract is
+    /// the deploying account here, so it is also the default signer/settler.
+    function _config(uint256 feeBps, address feeAdmin, address feeTreasury)
+        internal
+        view
+        returns (DeployWeb3Campaigns.Config memory c)
+    {
+        c = DeployWeb3Campaigns.Config({
+            deployer: address(deployScript),
+            treasury: treasury,
+            feeBps: feeBps,
+            feeAdmin: feeAdmin,
+            feeTreasury: feeTreasury,
+            signer: address(deployScript),
+            settler: address(deployScript)
+        });
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                  SIGNER_ADDRESS / SETTLER_ADDRESS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_Deploy_DefaultRoles_DeployerHoldsSignerAndSettler() public view {
+        assertTrue(campaigns.hasRole(campaigns.SIGNER_ROLE(), address(deployScript)));
+        assertTrue(campaigns.hasRole(campaigns.SETTLER_ROLE(), address(deployScript)));
+        assertTrue(campaigns.hasRole(DEFAULT_ADMIN_ROLE, address(deployScript)));
+    }
+
+    function test_Deploy_ConfiguredRoles_HeldOnlyByConfiguredAddresses() public {
+        address signer = makeAddr("backendSigner");
+        address settler = makeAddr("backendSettler");
+        DeployWeb3Campaigns.Config memory c = _config(0, address(0), address(0));
+        c.signer = signer;
+        c.settler = settler;
+
+        Web3Campaigns w = deployScript.deploy(c).campaigns;
+
+        assertTrue(w.hasRole(w.SIGNER_ROLE(), signer));
+        assertTrue(w.hasRole(w.SETTLER_ROLE(), settler));
+        assertFalse(w.hasRole(w.SIGNER_ROLE(), address(deployScript)));
+        assertFalse(w.hasRole(w.SETTLER_ROLE(), address(deployScript)));
+        // Admin and the other constructor-granted roles stay on the deployer.
+        assertTrue(w.hasRole(DEFAULT_ADMIN_ROLE, address(deployScript)));
+        assertTrue(w.hasRole(w.MODERATOR_ROLE(), address(deployScript)));
+        assertTrue(w.hasRole(w.EMERGENCY_ADMIN(), address(deployScript)));
+    }
+
+    function test_Deploy_RevertsOnZeroSignerOrSettler() public {
+        DeployWeb3Campaigns.Config memory c = _config(0, address(0), address(0));
+        c.signer = address(0);
+        vm.expectRevert(bytes("SIGNER_ADDRESS is zero"));
+        deployScript.deploy(c);
+
+        c = _config(0, address(0), address(0));
+        c.settler = address(0);
+        vm.expectRevert(bytes("SETTLER_ADDRESS is zero"));
+        deployScript.deploy(c);
+    }
+
+    function test_Deploy_RevertsWhenConfigDeployerIsNotTheDeployingAccount() public {
+        DeployWeb3Campaigns.Config memory c = _config(0, address(0), address(0));
+        c.deployer = makeAddr("notTheDeployer");
+        vm.expectRevert(bytes("Config.deployer is not the deploying account"));
+        deployScript.deploy(c);
+    }
+
+    /// @notice End to end through the env path, the way `make deploy-sepolia` runs it. The script
+    /// code is etched at a key-holding EOA so "the deployer" can sign: its attestation must be
+    /// rejected once SIGNER_ADDRESS moved the role, and the configured signer's accepted. All env
+    /// handling lives in this one test so parallel tests never observe these vars.
+    function test_Deploy_RoleEnvVars_EndToEnd() public {
+        (address deployerEoa, uint256 deployerPk) = makeAddrAndKey("deployerEoa");
+        (address signer, uint256 signerPk) = makeAddrAndKey("envSigner");
+        address settler = makeAddr("envSettler");
+        vm.etch(deployerEoa, address(deployScript).code);
+        DeployWeb3Campaigns script = DeployWeb3Campaigns(deployerEoa);
+
+        DeployWeb3Campaigns.Config memory unset = script.readConfig(deployerEoa);
+        assertEq(unset.signer, deployerEoa, "default signer is the deployer");
+        assertEq(unset.settler, deployerEoa, "default settler is the deployer");
+
+        vm.setEnv("TREASURY_ADDRESS", vm.toString(treasury));
+        vm.setEnv("SIGNER_ADDRESS", vm.toString(signer));
+        vm.setEnv("SETTLER_ADDRESS", vm.toString(settler));
+        DeployWeb3Campaigns.Config memory c = script.readConfig(deployerEoa);
+        vm.setEnv("TREASURY_ADDRESS", "");
+        vm.setEnv("SIGNER_ADDRESS", "");
+        vm.setEnv("SETTLER_ADDRESS", "");
+
+        assertEq(c.signer, signer);
+        assertEq(c.settler, settler);
+        Web3Campaigns w = script.deploy(c).campaigns;
+
+        assertTrue(w.hasRole(w.SIGNER_ROLE(), signer));
+        assertTrue(w.hasRole(w.SETTLER_ROLE(), settler));
+        assertFalse(w.hasRole(w.SIGNER_ROLE(), deployerEoa));
+        assertFalse(w.hasRole(w.SETTLER_ROLE(), deployerEoa));
+        assertTrue(w.hasRole(DEFAULT_ADMIN_ROLE, deployerEoa));
+
+        uint256 startTime = block.timestamp + START_OFFSET;
+        vm.startPrank(host1);
+        w.grantHostRole(host1);
+        uint256 id = w.createCampaign("C", startTime, startTime + CAMPAIGN_DURATION);
+        w.addTaskToCampaign(id, CampaignStorage.TaskType.SOCIAL_FOLLOW, "Follow us", "", false);
+        vm.stopPrank();
+        vm.warp(startTime + 1);
+        vm.prank(host1);
+        w.openCampaign(id);
+
+        vm.expectRevert(CampaignStorage.Web3Campaigns__InvalidSigner.selector);
+        this.attestExternal(w, deployerPk, id, p1);
+        assertFalse(w.hasCompletedTask(id, p1, 0));
+
+        this.attestExternal(w, signerPk, id, p1);
+        assertTrue(w.hasCompletedTask(id, p1, 0));
+    }
+
+    /// @dev Each test uses its own env var name so parallel tests never race on shared env state.
+    function test_EnvAddressOr_UnsetOrEmptyFallsBackToDefault() public {
+        address d = makeAddr("default");
+        assertEq(deployScript.envAddressOr("DEPLOY_SMOKE_UNSET_ADDR", d), d);
+        vm.setEnv("DEPLOY_SMOKE_EMPTY_ADDR", "");
+        assertEq(deployScript.envAddressOr("DEPLOY_SMOKE_EMPTY_ADDR", d), d);
+    }
+
+    function test_EnvAddressOr_AcceptsLowercaseAndChecksummed() public {
+        vm.setEnv("DEPLOY_SMOKE_LOWER_ADDR", "0x52908400098527886e0f7030069857d2e4169ee7");
+        assertEq(
+            deployScript.envAddressOr("DEPLOY_SMOKE_LOWER_ADDR", address(1)), 0x52908400098527886E0F7030069857D2E4169EE7
+        );
+        vm.setEnv("DEPLOY_SMOKE_CHECKSUM_ADDR", "0x52908400098527886E0F7030069857D2E4169EE7");
+        assertEq(
+            deployScript.envAddressOr("DEPLOY_SMOKE_CHECKSUM_ADDR", address(1)),
+            0x52908400098527886E0F7030069857D2E4169EE7
+        );
+    }
+
+    /// @notice Regression: vm.envOr(name, address) silently returns the default for unparseable
+    /// input, so a typo'd SIGNER_ADDRESS would have quietly kept SIGNER_ROLE on the deployer.
+    function test_EnvAddressOr_RevertsOnMalformedInsteadOfFallingBack() public {
+        vm.setEnv("DEPLOY_SMOKE_SHORT_ADDR", "0x1234");
+        vm.expectRevert();
+        deployScript.envAddressOr("DEPLOY_SMOKE_SHORT_ADDR", address(1));
+
+        vm.setEnv("DEPLOY_SMOKE_GARBAGE_ADDR", "not-an-address");
+        vm.expectRevert();
+        deployScript.envAddressOr("DEPLOY_SMOKE_GARBAGE_ADDR", address(1));
+    }
+
+    function test_EnvAddressOr_RevertsOnBadChecksum() public {
+        vm.setEnv("DEPLOY_SMOKE_BADSUM_ADDR", "0x52908400098527886E0F7030069857D2E4169eE7");
+        vm.expectRevert(bytes("address env var: bad checksum"));
+        deployScript.envAddressOr("DEPLOY_SMOKE_BADSUM_ADDR", address(1));
+    }
+
+    /// @dev External shim so vm.expectRevert targets the attestation itself, not the view calls
+    /// _attestTask makes while building the signature.
+    function attestExternal(Web3Campaigns w, uint256 pk, uint256 id, address who) external {
+        _attestTask(w, pk, id, who, 0, true);
     }
 }

@@ -28,6 +28,10 @@ setFeeModule(feeModule)                // only when FEE_BPS > 0
 | `FEE_BPS` | `0` | `0` = **no `FeeModule` deployed, fees fully disabled** — the intended beta default. Max 1000 (10%). |
 | `FEE_ADMIN` | the deployer | `FeeModule` admin. **Should be a distinct key/multisig in production** — see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md). |
 | `FEE_TREASURY` | `TREASURY_ADDRESS` | Where protocol fees land. |
+| `SIGNER_ADDRESS` | the deployer | Sole `SIGNER_ROLE` holder (the backend attestation key). If it differs from the deployer, the script grants it and **revokes the deployer's constructor-granted `SIGNER_ROLE` in the same run**. |
+| `SETTLER_ADDRESS` | the deployer | Sole `SETTLER_ROLE` holder (the platform-automation key). Same grant-then-revoke behaviour as `SIGNER_ADDRESS`. |
+
+**Address parsing is strict.** Every address var is read via the script's `envAddressOr`: unset or empty means use the default, and anything else must parse as an address or the script aborts. Mixed-case input must also match its EIP-55 checksum. This is deliberate: plain `vm.envOr(name, address)` silently falls back to the default on a malformed value, so a typo'd `SIGNER_ADDRESS` would have quietly left `SIGNER_ROLE` on the deployer. `address(0)` is rejected for `SIGNER_ADDRESS`/`SETTLER_ADDRESS`. `DEFAULT_ADMIN_ROLE` is never revoked by the script.
 
 Required for the Makefile targets: `SEPOLIA_RPC_URL`, `DEPLOYER_ACCOUNT` (a **keystore account name**, never a raw key), `ETHERSCAN_API_KEY`.
 
@@ -38,16 +42,58 @@ make deploy-sepolia-dry     # 1. simulate first, every time -- prints all addres
 make deploy-sepolia         # 2. broadcast + verify on Etherscan
 ```
 
+### Test deploy (defaults)
+
+For a throwaway or test deployment, set no role/treasury vars. The deployer key ends up with every role (`DEFAULT_ADMIN_ROLE`, `HOST_ROLE`, `EMERGENCY_ADMIN`, `MODERATOR_ROLE`, `SIGNER_ROLE`, `SETTLER_ROLE`) and is the treasury. The dry run's log shows the same address on the `admin / mod / emerg`, `signer`, `settler` and `treasury` lines.
+
+### Beta deploy (dedicated role keys)
+
+Per frontend `docs/DECISIONS_v0.6.0.md` Decision 1, `SIGNER_ROLE` and `SETTLER_ROLE` must go straight to dedicated backend addresses and never sit on the deployer key:
+
+```bash
+export SIGNER_ADDRESS=0x...     # backend attestation signer (public address only -- never the key)
+export SETTLER_ADDRESS=0x...    # platform-automation settler
+export TREASURY_ADDRESS=0x...   # withdrawETH destination
+make deploy-sepolia-dry         # check the signer / settler / treasury log lines are the intended addresses
+make deploy-sepolia
+```
+
+Then verify on-chain (role ids are `keccak256` of the role name):
+
+```bash
+W3C=<Web3Campaigns address from the log>
+SIGNER=$(cast keccak "SIGNER_ROLE"); SETTLER=$(cast keccak "SETTLER_ROLE")
+cast call $W3C "hasRole(bytes32,address)(bool)" $SIGNER  $SIGNER_ADDRESS   --rpc-url $SEPOLIA_RPC_URL  # true
+cast call $W3C "hasRole(bytes32,address)(bool)" $SIGNER  <deployer>        --rpc-url $SEPOLIA_RPC_URL  # false
+cast call $W3C "hasRole(bytes32,address)(bool)" $SETTLER $SETTLER_ADDRESS  --rpc-url $SEPOLIA_RPC_URL  # true
+cast call $W3C "hasRole(bytes32,address)(bool)" $SETTLER <deployer>        --rpc-url $SEPOLIA_RPC_URL  # false
+cast call $W3C "getTreasury()(address)" --rpc-url $SEPOLIA_RPC_URL                                     # TREASURY_ADDRESS
+```
+
+Unset these vars afterwards (`unset SIGNER_ADDRESS SETTLER_ADDRESS TREASURY_ADDRESS`) so a later test deploy from the same shell doesn't inherit them.
+
+### Rotating `MODERATOR_ROLE` / `EMERGENCY_ADMIN` later
+
+The script leaves both on the deployer. To move either to a dedicated key or multisig, the `DEFAULT_ADMIN_ROLE` holder grants the new holder first, then revokes the deployer:
+
+```bash
+ROLE=$(cast keccak "EMERGENCY_ADMIN")   # or "MODERATOR_ROLE"
+cast send $W3C "grantRole(bytes32,address)"  $ROLE <new holder> --account $DEPLOYER_ACCOUNT --rpc-url $SEPOLIA_RPC_URL
+cast send $W3C "revokeRole(bytes32,address)" $ROLE <deployer>   --account $DEPLOYER_ACCOUNT --rpc-url $SEPOLIA_RPC_URL
+```
+
+The same pattern rotates `SIGNER_ROLE`/`SETTLER_ROLE` after deployment.
+
 ## Post-deploy verification
 
-The deployer EOA holds `DEFAULT_ADMIN_ROLE`, `HOST_ROLE`, `EMERGENCY_ADMIN`, `MODERATOR_ROLE`, `SIGNER_ROLE`, and `SETTLER_ROLE` (all granted in the constructor chain — `SETTLER_ROLE` needs no script wiring beyond this, identical to how `SIGNER_ROLE` is handled). Before announcing the deployment, confirm on-chain:
+The deployer EOA holds `DEFAULT_ADMIN_ROLE`, `HOST_ROLE`, `EMERGENCY_ADMIN` and `MODERATOR_ROLE` (granted in the constructor chain). It also holds `SIGNER_ROLE` and `SETTLER_ROLE` **unless** `SIGNER_ADDRESS`/`SETTLER_ADDRESS` were set, in which case only those addresses do. Before announcing the deployment, confirm on-chain:
 
 1. `getTreasury()` → your intended treasury, **not** `address(0)`.
 2. `getFeeModule()` → `address(0)` for a fees-disabled beta, else the deployed `FeeModule`.
 3. `OnChainRewardModule.WEB3_CAMPAIGNS()` and `NFTSettlementModule.WEB3_CAMPAIGNS()` → the deployed `Web3Campaigns` address (proves the satellites anchor to the right entrypoint).
 4. Run one throwaway campaign end-to-end per reward path you intend to use. The registration of the reward/NFT modules has **no global getter** — it is only observable functionally, or per-campaign via `getCampaignRewardModule(id)` / `getCampaignNFTModule(id)` once a campaign adopts/deposits.
-5. Rotate `SIGNER_ROLE` to your backend's signing key and revoke it from the deployer if they differ (`grantRole`/`revokeRole` — see [TASK_VERIFICATION.md](TASK_VERIFICATION.md)).
-6. Rotate `SETTLER_ROLE` the same way if your platform-automation key differs from the deployer — it's the key allowed to fill a Merkle-settlement vacuum on a campaign abandoned for 14+ days (`SETTLEMENT_FALLBACK_DELAY`, see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md)). No separate global getter exists for it either; check via `hasRole(SETTLER_ROLE, addr)`.
+5. `SIGNER_ROLE` is held by exactly your backend's signing key: set `SIGNER_ADDRESS` at deploy time (beta), or rotate afterwards with `grantRole`/`revokeRole` (see above and [TASK_VERIFICATION.md](TASK_VERIFICATION.md)).
+6. `SETTLER_ROLE` the same way (`SETTLER_ADDRESS`, or rotate afterwards) if your platform-automation key differs from the deployer — it's the key allowed to fill a Merkle-settlement vacuum on a campaign abandoned for 14+ days (`SETTLEMENT_FALLBACK_DELAY`, see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md)). No separate global getter exists for it either; check via `hasRole(SETTLER_ROLE, addr)`.
 
 ## Things that will bite you
 
