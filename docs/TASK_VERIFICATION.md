@@ -6,7 +6,9 @@
 
 Previously the host sent an on-chain tx (`verifyTaskCompletion`/`batchVerifyTaskCompletion`) per participant per off-chain task (Twitter follow, Discord join, etc.) — gas the host ate, and it didn't scale past a few hundred users. Now a **`SIGNER_ROLE`** key (typically the host's backend, after checking the actual social API) signs an EIP-712 attestation off-chain, and **anyone** can submit it on-chain — the contract only trusts the recovered signer, not `msg.sender`. This is **trust-minimized, not trustless**: verification correctness still depends on the signer's backend being honest and its key staying uncompromised. Key rotation/revocation is a plain `AccessControl` `grantRole`/`revokeRole(SIGNER_ROLE, ...)` call by `DEFAULT_ADMIN_ROLE` — no custom rotation function needed.
 
-`ONCHAIN_HOLD_ERC20`/`ONCHAIN_HOLD_ERC721` are unaffected — they remain self-verified on-chain in `completeTask` and are explicitly rejected by the signature path (`Web3Campaigns__TaskNotVerifiableByHost`) to prevent a compromised signer from forging on-chain-verifiable facts.
+**Attestation is the only completion path for every non-hold task type** (social, Discord/Telegram, wallet-connect, `HUMANITY_VERIFICATION`, `ONCHAIN_TX`): `completeTask` reverts `Web3Campaigns__NotSelfVerifiable` for all of them. Before `fix/self-assert-tasks`, every type except `ONCHAIN_TX` silently accepted an unchecked self-assertion; see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md).
+
+`ONCHAIN_HOLD_ERC20`/`ONCHAIN_HOLD_ERC721` are the reverse: they are self-verified on-chain in `completeTask` (balance/ownership checked against `msg.sender`) and explicitly rejected by the signature path (`Web3Campaigns__TaskNotVerifiableByHost`), so a compromised signer cannot forge on-chain-verifiable facts.
 
 ## EIP-712 domain & typehash
 
@@ -47,6 +49,7 @@ A backend signing service should, per attestation:
 
 ## Open items / caveats
 - **Trust model**: this is signer-trusted, not trustless. A compromised `SIGNER_ROLE` key can mint arbitrary completions until revoked. No threshold (N-of-M) signing yet — single-signer by design for this phase; see `docs/NEXT_STEPS.md` if that needs revisiting.
-- **Contract size**: `Web3Campaigns` is now 21.2KB runtime (24.576KB limit) — ~3.3KB headroom left. Future features should watch `forge build --sizes`.
+- **Contract size**: `Web3Campaigns` is 24,561B runtime against the 24,576B limit (15B headroom, after `fix/self-assert-tasks`). See `docs/NEXT_STEPS.md`.
+- **Moderator flag / anti-spam cooldown** are enforced only in `completeTask`, so they apply to hold tasks only. For attested tasks, the signer backend is the gate.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md), [TEST_AND_BUILD.md](TEST_AND_BUILD.md).

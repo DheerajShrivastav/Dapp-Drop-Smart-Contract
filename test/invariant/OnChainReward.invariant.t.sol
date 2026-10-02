@@ -26,7 +26,8 @@ contract OnChainRewardInvariant is StdInvariant, Test {
     function setUp() public {
         vm.warp(1_000_000);
 
-        address deployer = vm.addr(1);
+        uint256 deployerPk = 1;
+        address deployer = vm.addr(deployerPk);
         vm.startPrank(deployer);
         campaigns = new Web3Campaigns();
         initialModule = new OnChainRewardModule(address(campaigns));
@@ -34,7 +35,7 @@ contract OnChainRewardInvariant is StdInvariant, Test {
         vm.stopPrank();
 
         token = new ERC20Mock();
-        handler = new OnChainRewardHandler(campaigns, token, initialModule, deployer);
+        handler = new OnChainRewardHandler(campaigns, token, initialModule, deployer, deployerPk);
 
         vm.prank(deployer);
         campaigns.grantHostRole(address(handler));

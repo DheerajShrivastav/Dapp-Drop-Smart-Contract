@@ -309,8 +309,7 @@ flowchart TB
         TT{Task Type?}
         OnChainERC20["ONCHAIN_HOLD_ERC20<br/>Check token balance"]
         OnChainERC721["ONCHAIN_HOLD_ERC721<br/>Check NFT ownership"]
-        OnChainTX["ONCHAIN_TX<br/>Reverts - Oracle needed"]
-        OffChain["Social/Other Tasks<br/>Self-assertion only"]
+        OffChain["All other task types<br/>Revert NotSelfVerifiable<br/>(attestation-only)"]
     end
     
     subgraph "Completion"
@@ -336,15 +335,13 @@ flowchart TB
     
     TT -->|ONCHAIN_HOLD_ERC20| OnChainERC20
     TT -->|ONCHAIN_HOLD_ERC721| OnChainERC721
-    TT -->|ONCHAIN_TX| OnChainTX
     TT -->|Other| OffChain
     
     OnChainERC20 -->|Balance OK| Mark
     OnChainERC20 -->|Insufficient| Error7([Revert: InsufficientERC20Balance])
     OnChainERC721 -->|Owns NFT| Mark
     OnChainERC721 -->|Not owner| Error8([Revert: NotHoldingSpecificERC721])
-    OnChainTX --> Error9([Revert: InvalidTaskType])
-    OffChain --> Mark
+    OffChain --> Error9([Revert: NotSelfVerifiable])
     
     Mark --> Track
     Track -->|Yes| Inc

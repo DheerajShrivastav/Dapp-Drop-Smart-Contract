@@ -184,10 +184,12 @@ contract OnChainRewardModule is IOnChainRewardModule {
      * @notice Claim an on-chain (dispute-free) ERC20 reward for a RANK_TIERED or SCORE_TIERED
      *         campaign. No Merkle proof needed -- the amount is computed purely from this
      *         contract's own on-chain-tracked completion rank or task-point score.
-     * @dev For RANK_TIERED, requires the caller is CURRENTLY qualified (see notifyTaskCompletion) --
-     *      a signer may have revoked a required task after the historical rank was assigned; rank
-     *      itself is immutable, but current disqualification still blocks payout. For SCORE_TIERED,
-     *      the running score is always live-accurate, so no separate qualification check is needed.
+     * @dev Requires the participant is CURRENTLY qualified (every required task complete, live --
+     *      see notifyTaskCompletion) in both modes. For RANK_TIERED, a signer may have revoked a
+     *      required task after the historical rank was assigned; rank itself is immutable, but
+     *      current disqualification still blocks payout. For SCORE_TIERED, score alone is not
+     *      enough: required tasks (e.g. HUMANITY_VERIFICATION) must be complete, and a minScore-0
+     *      floor tier only pays participants who qualified.
      *      A rank/score matching no configured tier reverts NoTierMatched rather than silently
      *      paying zero and burning the claim, consistent with Web3Campaigns' Merkle claim path.
      * @param _campaignId Campaign ID
@@ -241,12 +243,15 @@ contract OnChainRewardModule is IOnChainRewardModule {
             revert CampaignStorage.Web3Campaigns__WrongSettlementMode();
         }
 
+        // Required for BOTH modes: without it SCORE_TIERED ignored required tasks entirely, and a
+        // minScore-0 tier paid any address that never participated.
+        if (!_currentlyQualified[_campaignId][_participant]) {
+            revert CampaignStorage.Web3Campaigns__NotFullyCompleted();
+        }
+
         uint256 amount;
         uint256 rankOrScore;
         if (mode == CampaignStorage.ERC20SettlementMode.RANK_TIERED) {
-            if (!_currentlyQualified[_campaignId][_participant]) {
-                revert CampaignStorage.Web3Campaigns__NotFullyCompleted();
-            }
             rankOrScore = _completionRank[_campaignId][_participant];
             amount = OnChainRewardLib.matchRankTier(_rankTiers[_campaignId], rankOrScore);
         } else {

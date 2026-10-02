@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.31;
 
-import {Test} from "forge-std/Test.sol";
 import {Web3Campaigns} from "../src/Web3Campaigns.sol";
+import {AttestationHelper} from "./utils/AttestationHelper.sol";
 import {CampaignStorage} from "../src/CampaignStorage.sol";
 import {NFTSettlementModule} from "../src/NFTSettlementModule.sol";
 import {OnChainRewardModule} from "../src/OnChainRewardModule.sol";
@@ -16,7 +16,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 /// the caller. Each sponsored path shares its full body (checks/effects/payout) with the
 /// self-claim path, so these tests focus on the delivery/authorization semantics plus spot-checks
 /// that the shared guards (double-claim, proof, dispute window, pause) fire identically.
-contract SponsoredClaimsTest is Test {
+contract SponsoredClaimsTest is AttestationHelper {
     Web3Campaigns public campaigns;
     NFTSettlementModule public nftModule;
     OnChainRewardModule public rewardModule;
@@ -28,13 +28,14 @@ contract SponsoredClaimsTest is Test {
     address public p1;
     address public sponsor; // the gas-paying backend wallet
 
+    uint256 constant SIGNER_PK = 1; // deployer = vm.addr(SIGNER_PK) holds SIGNER_ROLE by default
     uint256 constant START_OFFSET = 1 days;
     uint256 constant CAMPAIGN_DURATION = 7 days;
 
     function setUp() public {
         vm.warp(1_000_000);
 
-        deployer = vm.addr(1);
+        deployer = vm.addr(SIGNER_PK);
         host1 = vm.addr(2);
         p1 = vm.addr(4);
         sponsor = vm.addr(9);
@@ -158,8 +159,7 @@ contract SponsoredClaimsTest is Test {
         vm.prank(host1);
         campaigns.openCampaign(id);
 
-        vm.prank(p1);
-        campaigns.completeTask(id, 0);
+        _attestTask(campaigns, SIGNER_PK, id, p1, 0, true);
 
         vm.warp(endTime + 1);
         vm.prank(host1);
