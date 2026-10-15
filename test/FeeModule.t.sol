@@ -36,6 +36,25 @@ contract ZeroFeeZeroTreasuryModule is IFeeModule {
     }
 }
 
+/// @notice A rotated-in rogue module that asks for a configurable share of each funding. Used to
+/// prove Web3Campaigns caps the skim at 10% itself, independent of any module's own MAX_FEE_BPS.
+contract GreedyFeeModule is IFeeModule {
+    uint256 public num;
+    uint256 public den;
+    uint256 public plus;
+
+    constructor(uint256 _num, uint256 _den, uint256 _plus) {
+        num = _num;
+        den = _den;
+        plus = _plus;
+    }
+
+    function computeFee(uint256, uint256 amount) external view returns (uint256 feeAmount, address treasury) {
+        feeAmount = amount * num / den + plus;
+        treasury = address(0xFEE);
+    }
+}
+
 /// @notice Covers the protocol-fee module: the standalone FeeModule contract itself, and its
 /// wiring into Web3Campaigns' fundCampaignERC20 (a satellite split mirroring OnChainRewardModule --
 /// see docs/ARCHITECTURE.md).
@@ -259,6 +278,37 @@ contract FeeModuleTest is Test {
         vm.expectRevert(CampaignStorage.Web3Campaigns__FeeExceedsAmount.selector);
         campaigns.fundCampaignERC20(id, 100 ether);
         vm.stopPrank();
+    }
+
+    function _fundWith(IFeeModule module, uint256 amount) internal returns (uint256 id) {
+        vm.prank(deployer);
+        campaigns.setFeeModule(address(module));
+        id = _draftCampaign();
+        vm.prank(host1);
+        token.approve(address(campaigns), amount);
+    }
+
+    /// @notice Pre-production hardening: a rogue module asking for 100% of a funding is refused by
+    /// Web3Campaigns itself, not just by the reference module's own MAX_FEE_BPS.
+    function test_FundCampaignERC20_RogueModuleCannotTakeEverything() public {
+        uint256 id = _fundWith(new GreedyFeeModule(1, 1, 0), 100 ether);
+        vm.prank(host1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__FeeExceedsAmount.selector);
+        campaigns.fundCampaignERC20(id, 100 ether);
+    }
+
+    function test_FundCampaignERC20_FeeOneWeiOverTenPercentReverts() public {
+        uint256 id = _fundWith(new GreedyFeeModule(1, 10, 1), 100 ether);
+        vm.prank(host1);
+        vm.expectRevert(CampaignStorage.Web3Campaigns__FeeExceedsAmount.selector);
+        campaigns.fundCampaignERC20(id, 100 ether);
+    }
+
+    function test_FundCampaignERC20_FeeOfExactlyTenPercentIsAllowed() public {
+        uint256 id = _fundWith(new GreedyFeeModule(1, 10, 0), 100 ether);
+        vm.prank(host1);
+        campaigns.fundCampaignERC20(id, 100 ether);
+        assertEq(token.balanceOf(address(0xFEE)), 10 ether);
     }
 
     /// @notice A misbehaving module returning a nonzero fee with a zero treasury is rejected

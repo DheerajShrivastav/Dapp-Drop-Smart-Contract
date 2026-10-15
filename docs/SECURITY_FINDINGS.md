@@ -277,6 +277,10 @@ The settler branch keeps its existing "some root exists" rule. As a consequence,
 
 A zero-participant campaign that never settled isn't trapped; it uses `cancelCampaign` (Ended is accepted) and gets an immediate refund. **Residual (unchanged host-trust boundary, #14):** a dishonest host can still publish an *unfair* root. It is public for `ROOT_DISPUTE_WINDOW` (24 h) before anything moves, which is exactly the review window the product promises.
 
+## ✅ FIXED (MEDIUM, admin-trust) — a rotated-in fee module could skim up to 100 % of new funding (`fix/nft-custody-host-close`)
+
+`fundCampaignERC20` only checked `feeAmount > received`. The 10 % ceiling (`MAX_FEE_BPS = 1,000`) existed only inside the reference `FeeModule`, so a module an admin rotated in via `setFeeModule` could take everything a host funded from then on. `Web3Campaigns` now enforces the ceiling itself: `feeAmount > received / 10` reverts `FeeExceedsAmount`. Floor division matches the reference module's rounding at its 1,000 bps cap. Cost: +3 B. Tests (`test/FeeModule.t.sol`, +3, via a `GreedyFeeModule`): 100 % reverts, 10 % + 1 wei reverts, exactly 10 % passes. Negative control: without the cap, the first two fail.
+
 ## Size headroom recovered — string reverts converted to custom errors (`fix/nft-custody-host-close`)
 
 The two fixes cost 326 B against 15 B of headroom. To pay for them without extracting features or lowering `optimizer_runs` (which frees only ~150 B, and costs gas on every call), the last 15 string reverts in the entrypoint's tree became custom errors, reusing existing errors where the meaning was identical:
@@ -285,7 +289,7 @@ The two fixes cost 326 B against 15 B of headroom. To pay for them without extra
 - New errors: `InvalidTextLength` (name, task-description and off-chain-description bounds, including `batchAddTasks`), `TooManyTasks`, `RateLimited` (both rate-limit checks), `AccountFlagged` and `NotInActivePeriod` (`campaignTimeValid`).
 - The `fallback()` that only did `revert("Function does not exist")` was removed; an unknown selector reverts with empty data by default.
 
-Saved 770 B (the fixes themselves cost 348 B, including the CEI loop). **Net: `Web3Campaigns` 24,561 B → 24,139 B (437 B headroom, up from 15 B).**
+Saved 770 B (the fixes themselves cost 348 B, including the CEI loop). **Net: `Web3Campaigns` 24,561 B → 24,139 B (437 B headroom, up from 15 B); 24,142 B / 434 B after the fee cap above.**
 
 **Behaviour change (revert data only).** Off-chain code that matched these revert *strings* must switch to the new error selectors. The frontend's `web3-service.ts` matches six of them for friendly messages; update it, along with the new ABI, in the redeploy batch.
 

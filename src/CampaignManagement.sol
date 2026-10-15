@@ -303,7 +303,10 @@ contract CampaignManagement is CampaignStorage {
         address treasury;
         if (_feeModule != address(0)) {
             (feeAmount, treasury) = IFeeModule(_feeModule).computeFee(_campaignId, received);
-            if (feeAmount > received) {
+            // Hard 10% ceiling enforced HERE, not only inside the module (FeeModule.MAX_FEE_BPS): a
+            // rotated-in rogue module could otherwise skim up to 100% of every new funding. Floor
+            // division matches the reference module's own rounding at its 1,000 bps cap.
+            if (feeAmount > received / 10) {
                 revert Web3Campaigns__FeeExceedsAmount();
             }
             // The reference FeeModule can never return a zero treasury alongside a nonzero fee (both
