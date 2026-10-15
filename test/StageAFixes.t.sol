@@ -249,7 +249,7 @@ contract StageAFixesTest is Test {
         campaigns.flagAccount(participant1, 100); // == MAX_SUSPICIOUS_SCORE
 
         vm.prank(participant1);
-        vm.expectRevert(bytes("Account flagged for suspicious activity"));
+        vm.expectRevert(CampaignStorage.Web3Campaigns__AccountFlagged.selector);
         campaigns.completeTask(campaignId, 0);
     }
 

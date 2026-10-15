@@ -55,10 +55,10 @@ contract ParticipantManagement is CampaignStorage {
         }
 
         // SECURITY CHECKS
-        require(_suspiciousActivityScore[msg.sender] < MAX_SUSPICIOUS_SCORE, "Account flagged for suspicious activity");
+        if (_suspiciousActivityScore[msg.sender] >= MAX_SUSPICIOUS_SCORE) revert Web3Campaigns__AccountFlagged();
 
         // Anti-spam protection
-        require(block.timestamp - _lastActivityTime[msg.sender] >= 30 seconds, "Too many rapid actions");
+        if (block.timestamp - _lastActivityTime[msg.sender] < 30 seconds) revert Web3Campaigns__RateLimited();
 
         CampaignTask storage currentTask = campaign.tasks[_taskIndex];
 
@@ -497,6 +497,9 @@ contract ParticipantManagement is CampaignStorage {
             revert Web3Campaigns__NFTModuleMismatch(_campaignId, _campaignNFTModule[_campaignId], msg.sender);
         }
 
+        // Only NFTs escrowed under THIS campaign can leave for it: underflow reverts (Panic 0x11) if
+        // the pinned module asks for a token, or more ERC1155 units, than this campaign deposited.
+        _nftCustody[_campaignId][_token][_tokenId] -= _standard == NFTStandard.ERC721 ? 1 : _amount;
         if (_standard == NFTStandard.ERC721) {
             IERC721(_token).safeTransferFrom(address(this), _recipient, _tokenId);
         } else {

@@ -64,7 +64,7 @@ contract CampaignManagement is CampaignStorage {
         onlyRole(HOST_ROLE)
         returns (uint256)
     {
-        require(bytes(_name).length > 0 && bytes(_name).length <= 200, "Invalid name length");
+        if (bytes(_name).length == 0 || bytes(_name).length > 200) revert Web3Campaigns__InvalidTextLength();
 
         // Rate Limiting
         _checkRateLimit(msg.sender);
@@ -109,7 +109,9 @@ contract CampaignManagement is CampaignStorage {
         bool _isOptional
     ) public onlyHost(_campaignId) {
         // Add security validation
-        require(bytes(_description).length > 0 && bytes(_description).length <= 1000, "Invalid description length");
+        if (bytes(_description).length == 0 || bytes(_description).length > 1000) {
+            revert Web3Campaigns__InvalidTextLength();
+        }
 
         Campaign storage campaign = _campaigns[_campaignId];
 
@@ -117,7 +119,7 @@ contract CampaignManagement is CampaignStorage {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
         // Limit tasks per campaign for security
-        require(campaign.tasks.length < 20, "Too many tasks per campaign");
+        if (campaign.tasks.length >= 20) revert Web3Campaigns__TooManyTasks();
 
         campaign.tasks
             .push(
@@ -160,13 +162,12 @@ contract CampaignManagement is CampaignStorage {
         if (campaign.status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
-        require(campaign.tasks.length + length <= 20, "Too many tasks per campaign");
+        if (campaign.tasks.length + length > 20) revert Web3Campaigns__TooManyTasks();
 
         for (uint256 i; i < length; ++i) {
-            require(
-                bytes(_descriptions[i]).length > 0 && bytes(_descriptions[i]).length <= 1000,
-                "Invalid description length"
-            );
+            if (bytes(_descriptions[i]).length == 0 || bytes(_descriptions[i]).length > 1000) {
+                revert Web3Campaigns__InvalidTextLength();
+            }
 
             campaign.tasks
                 .push(
@@ -492,6 +493,10 @@ contract CampaignManagement is CampaignStorage {
         if (len == 0 || len > 100) {
             revert Web3Campaigns__BatchTooLarge();
         }
+        // Entrypoint-side custody ledger (see _nftCustody), written before any external call.
+        for (uint256 i; i < len; ++i) {
+            ++_nftCustody[_campaignId][_token][_tokenIds[i]];
+        }
 
         // Pin the module BEFORE recording escrow bookkeeping in it -- see _pinNFTModule.
         address module = _pinNFTModule(_campaignId);
@@ -534,6 +539,7 @@ contract CampaignManagement is CampaignStorage {
             if (_amounts[i] == 0) {
                 revert Web3Campaigns__InvalidAmount();
             }
+            _nftCustody[_campaignId][_token][_ids[i]] += _amounts[i];
         }
 
         address module = _pinNFTModule(_campaignId);
@@ -695,8 +701,9 @@ contract CampaignManagement is CampaignStorage {
         if (_campaigns[_campaignId].status != CampaignStatus.Draft) {
             revert Web3Campaigns__CampaignAlreadyStarted();
         }
-        require(bytes(_description).length > 0, "Description required");
-        require(bytes(_description).length <= 500, "Description too long");
+        if (bytes(_description).length == 0 || bytes(_description).length > 500) {
+            revert Web3Campaigns__InvalidTextLength();
+        }
 
         OffChainReward storage offChain = _offChainReward[_campaignId];
         offChain.enabled = true;
@@ -783,6 +790,11 @@ contract CampaignManagement is CampaignStorage {
      *      host-only and pay only the host -- a settler-triggered close merely starts the grace
      *      clock, it never redirects where the eventual sweep goes; unswept leftover dust of a truly
      *      abandoned host is that host's own loss, unchanged from before this feature.
+     *      Any caller (host included) is refused while a Merkle settlement is still owed: escrowed
+     *      ERC20 with no settlement mode committed, or deposited NFTs with no NFT root. Closing then
+     *      would freeze roots forever (they're Ended-only), block the settler fallback, and let the
+     *      host sweep everything after the grace period -- participants did the work, nobody can
+     *      claim. A zero-participant campaign that never settled uses cancelCampaign instead.
      * @param _campaignId The ID of the campaign.
      */
     function closeCampaign(uint256 _campaignId) public virtual {
@@ -790,11 +802,18 @@ contract CampaignManagement is CampaignStorage {
         _requireExistsAndEnded(campaign);
 
         bool isSettlerFallback = campaign.host != msg.sender;
+        bool nftPublished = _nftSettlementPublished(_campaignId);
         if (isSettlerFallback) {
             _requireSettlerRoleAndTiming(campaign);
-            if (_erc20MerkleRoot[_campaignId] == bytes32(0) && !_nftSettlementPublished(_campaignId)) {
+            if (_erc20MerkleRoot[_campaignId] == bytes32(0) && !nftPublished) {
                 revert Web3Campaigns__SettlementNotPublished();
             }
+        }
+        if (
+            (_erc20SettlementMode[_campaignId] == ERC20SettlementMode.UNSET && _erc20Escrowed[_campaignId] != 0)
+                || (_campaignNFTModule[_campaignId] != address(0) && !nftPublished)
+        ) {
+            revert Web3Campaigns__SettlementNotPublished();
         }
 
         campaign.status = CampaignStatus.Closed;

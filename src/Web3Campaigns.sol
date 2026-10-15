@@ -69,7 +69,7 @@ contract Web3Campaigns is
      * @notice Enhanced modifier with security checks
      */
     modifier onlyHost(uint256 _campaignId) override(CampaignManagement, ParticipantManagement, CampaignStorage) {
-        require(!paused(), "Contract is paused");
+        _requireNotPaused();
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
@@ -83,11 +83,11 @@ contract Web3Campaigns is
      * @notice Security wrapper for campaign operations
      */
     modifier whenActiveAndValid(uint256 _campaignId) {
-        require(!paused(), "Contract is paused");
+        _requireNotPaused();
         if (_campaigns[_campaignId].id == 0) {
             revert Web3Campaigns__CampaignNotFound();
         }
-        require(_campaigns[_campaignId].status == CampaignStatus.Open, "Campaign not active");
+        if (_campaigns[_campaignId].status != CampaignStatus.Open) revert Web3Campaigns__CampaignNotOpen();
         _;
     }
 
@@ -132,13 +132,12 @@ contract Web3Campaigns is
     }
 
     receive() external payable whenNotPaused nonReentrant {
-        require(msg.value > 0, "Invalid ETH amount");
+        if (msg.value == 0) revert Web3Campaigns__InvalidAmount();
         emit FundsReceived(msg.sender, msg.value);
     }
 
-    fallback() external payable whenNotPaused {
-        revert("Function does not exist");
-    }
+    // No fallback(): a call to an unknown selector reverts with empty data by default, which is
+    // all the old `revert("Function does not exist")` fallback did (minus the string).
 
     // Secure wrapper for CampaignManagement.createCampaign
     function createCampaign(string memory _name, uint256 _startTime, uint256 _endTime)
