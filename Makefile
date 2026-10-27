@@ -65,5 +65,8 @@ deploy-sepolia:
 		--rpc-url $${SEPOLIA_RPC_URL} \
 		--account $${DEPLOYER_ACCOUNT} \
 		--broadcast \
+		--slow \
+		--skip-simulation \
+		--gas-estimate-multiplier 125 \
 		--verify \
 		--etherscan-api-key $${ETHERSCAN_API_KEY}
