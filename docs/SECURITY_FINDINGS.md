@@ -255,6 +255,59 @@ Both checks reuse the existing `Web3Campaigns__CampaignNotCancellable` error rat
 
 **Deployment / frontend.** Needs the same redeploy as PR #23; already-deployed contracts keep the bug. After the redeploy, no participant UI may call `completeTask` for a non-hold task, because it will revert. The frontend's only UI caller is already hold-only, but `web3-service.ts`'s `completeTask` wrapper still has a non-hold branch, and several frontend docs describe client-side `completeTask` for social or humanity tasks.
 
+## ✅ FIXED (HIGH) — NFT custody: a module pinned to one campaign could move another campaign's NFTs (`fix/nft-custody-host-close`)
+
+**Bug.** `executeNFTTransferOut` authorized solely on `msg.sender == _campaignNFTModule[_campaignId]` for the `_campaignId` the caller passed in. It never checked that the token being moved was escrowed under that campaign; all per-campaign NFT bookkeeping lived on the module, which `Web3Campaigns` trusted completely. Because `grantHostRole` is open and a fresh campaign pins whatever module is the global default at its first deposit, an admin-registered rogue (or buggy) NFT module could be pinned to a brand-new campaign and then move **every other campaign's escrowed NFTs**, including campaigns pinned to the legitimate module. Per-campaign pinning protected the module *assignment*, not the *assets*. ERC20 was never affected: its per-campaign `_erc20Escrowed`/`_erc20Distributed` ledger lives in `Web3Campaigns` itself. Found by the landing-page studio's trust review (TRS) and confirmed with a passing proof-of-concept against `dev` 8f16076. The deployed Sepolia contracts have the bug.
+
+**Fix.** A per-campaign NFT custody ledger in `Web3Campaigns`, mirroring the ERC20 one: `_nftCustody[campaignId][token][tokenId]` (`CampaignStorage`).
+- Credited in `depositERC721Rewards` (+1 per id) and `depositERC1155Rewards` (+amount), in both cases before any external call.
+- Debited in `executeNFTTransferOut` with checked arithmetic, 1 for ERC721 and `_amount` for ERC1155. An over-ask underflows and reverts (Panic 0x11, chosen over a new custom error to save bytecode).
+
+A module, legitimate or not, can now only ever move what was deposited under the campaign it's pinned to. That's the pin's documented trust boundary, and nothing more.
+
+## ✅ FIXED (HIGH) — host could close a campaign that still owed a Merkle settlement (`fix/nft-custody-host-close`)
+
+**Bug.** `closeCampaign` required a published root only on the `SETTLER_ROLE` branch. A host could close an `Ended` Merkle campaign with escrowed ERC20 or deposited NFTs and **no root at all**. Roots are Ended-only, so after `Closed`, nobody (host or settler) could ever publish one, and the 14-day settler fallback was dead. Then, after `CLAIM_GRACE_PERIOD`, the host swept 100 % of the escrow. Participants did the work and nobody could claim. Tiered campaigns weren't affected (claims are computed on-chain and stay open through the grace period). Found by the landing studio's red-team review (RED-03).
+
+**Fix.** Any caller of `closeCampaign`, host or settler, is now refused with `Web3Campaigns__SettlementNotPublished` while a Merkle settlement is still owed:
+- escrowed ERC20 with no settlement mode committed (`_erc20SettlementMode == UNSET && _erc20Escrowed != 0`); **or**
+- deposited NFTs (a pinned module) with no NFT root.
+
+The settler branch keeps its existing "some root exists" rule. As a consequence, it's now also stricter: on a mixed ERC20 + NFT campaign, one published root is no longer enough for a fallback close, which would have stranded the other path's winners.
+
+A zero-participant campaign that never settled isn't trapped; it uses `cancelCampaign` (Ended is accepted) and gets an immediate refund. **Residual (unchanged host-trust boundary, #14):** a dishonest host can still publish an *unfair* root. It is public for `ROOT_DISPUTE_WINDOW` (24 h) before anything moves, which is exactly the review window the product promises.
+
+## ✅ FIXED (MEDIUM, admin-trust) — a rotated-in fee module could skim up to 100 % of new funding (`fix/nft-custody-host-close`)
+
+`fundCampaignERC20` only checked `feeAmount > received`. The 10 % ceiling (`MAX_FEE_BPS = 1,000`) existed only inside the reference `FeeModule`, so a module an admin rotated in via `setFeeModule` could take everything a host funded from then on. `Web3Campaigns` now enforces the ceiling itself: `feeAmount > received / 10` reverts `FeeExceedsAmount`. Floor division matches the reference module's rounding at its 1,000 bps cap. Cost: +3 B. Tests (`test/FeeModule.t.sol`, +3, via a `GreedyFeeModule`): 100 % reverts, 10 % + 1 wei reverts, exactly 10 % passes. Negative control: without the cap, the first two fail.
+
+## Size headroom recovered — string reverts converted to custom errors (`fix/nft-custody-host-close`)
+
+The two fixes cost 326 B against 15 B of headroom. To pay for them without extracting features or lowering `optimizer_runs` (which frees only ~150 B, and costs gas on every call), the last 15 string reverts in the entrypoint's tree became custom errors, reusing existing errors where the meaning was identical:
+- `onlyHost` / `whenActiveAndValid` paused checks → OZ `_requireNotPaused()` (`EnforcedPause`). The modifier is inlined in every host function, so this was the biggest saving.
+- "Campaign not active" → `CampaignNotOpen`; "Invalid ETH amount" → `InvalidAmount`.
+- New errors: `InvalidTextLength` (name, task-description and off-chain-description bounds, including `batchAddTasks`), `TooManyTasks`, `RateLimited` (both rate-limit checks), `AccountFlagged` and `NotInActivePeriod` (`campaignTimeValid`).
+- The `fallback()` that only did `revert("Function does not exist")` was removed; an unknown selector reverts with empty data by default.
+
+Saved 770 B (the fixes themselves cost 348 B, including the CEI loop). **Net: `Web3Campaigns` 24,561 B → 24,139 B (437 B headroom, up from 15 B); 24,142 B / 434 B after the fee cap above.**
+
+**Behaviour change (revert data only).** Off-chain code that matched these revert *strings* must switch to the new error selectors. The frontend's `web3-service.ts` matches six of them for friendly messages; update it, along with the new ABI, in the redeploy batch.
+
+**Tests** (267 → 285). New `test/PreProdFixes.t.sol`:
+- a `RogueNFTModule` proof-of-concept: it can't take another campaign's ERC721 or excess ERC1155 units, and can still move its own campaign's tokens exactly once;
+- host close reverts with escrowed ERC20 or deposited NFTs and no root, works once the roots exist (including mixed rewards needing both), and still works with no on-chain rewards; the idle-campaign path goes through cancel;
+- the settler fallback needs every owed root;
+- the converted errors (including `NotInActivePeriod` on `completeTask` after `endTime`), and that an unknown selector reverts.
+
+`test/StageAFixes.t.sol`'s flag test now expects `AccountFlagged`. Negative control: against the original `src/`, all 7 security tests fail and the 4 behaviour-preserving ones pass.
+
+**Gate.**
+- `forge fmt --check` is clean.
+- Slither: 291 results (`dev`: 293). A first draft added a `reentrancy-vulnerabilities-1` on `depositERC721Rewards` (custody written inside the transfer loop); it was fixed by crediting custody in a loop before any external call (CEI).
+- Aderyn: High 1 / Low 15, the same categories as `dev`. Accepted instance growth: "costly operations inside loop" +2 (the bounded ≤100-item custody writes) and "state change without event" +1 (`executeNFTTransferOut`; the module's claim/withdraw events and the token's Transfer event cover it).
+
+**Deployment.** Same redeploy batch as PRs #23/#24/#25; the deployed contracts keep both bugs.
+
 ## Dropped (2026-07-19) — participant-cap-check gas hoist, reverted for headroom
 
 Attempted the gas-hoist item flagged in the PR #19 review and tracked in `docs/NEXT_STEPS.md`: move the `ParticipantLimitReached` check in `completeTask`/`_verifySingleTaskCompletion` (`ParticipantManagement.sol`) ahead of the state writes/external `_notifyModuleOfCompletion` call/`ONCHAIN_HOLD_*` on-chain verification, so a doomed-to-revert at-capacity attempt fails before spending gas on any of that work rather than after. Implemented correctly — cap == 0 still means unlimited, an already-counted participant is never blocked, `test_CompleteTask_CapDoesNotBlockAnAlreadyCountedParticipant` and every other existing test passed unchanged (244/244).

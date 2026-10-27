@@ -85,6 +85,11 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // Per-campaign module pinning
     error Web3Campaigns__RewardModuleMismatch(uint256 campaignId, address expected, address caller);
     error Web3Campaigns__NFTModuleMismatch(uint256 campaignId, address expected, address caller);
+    error Web3Campaigns__InvalidTextLength();
+    error Web3Campaigns__TooManyTasks();
+    error Web3Campaigns__RateLimited();
+    error Web3Campaigns__AccountFlagged();
+    error Web3Campaigns__NotInActivePeriod();
 
     // Security constants
     uint256 public constant MIN_CAMPAIGN_DURATION = 1 hours;
@@ -264,6 +269,12 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
     // IWeb3CampaignsForNFTModule.sol / NFTSettlementModule.sol.
     address internal _nftModule; // trusted contract allowed to call executeNFTTransferOut
     mapping(uint256 => address) internal _campaignNFTModule; // campaignId => pinned module (0 = unpinned)
+    // Entrypoint-side NFT custody ledger: campaignId => token => tokenId => units escrowed under that
+    // campaign (1 per ERC721 id, the deposited amount per ERC1155 id). Credited on deposit, debited by
+    // executeNFTTransferOut with checked arithmetic, so a module -- even a rogue one an admin
+    // registers later and pins to a fresh campaign -- can only ever move NFTs escrowed under the
+    // campaign it is pinned to. Parity with the ERC20 path's per-campaign _erc20Escrowed ledger.
+    mapping(uint256 => mapping(address => mapping(uint256 => uint256))) internal _nftCustody;
 
     // --- On-chain reward settlement (dispute-free alternative to Merkle settlement) ---
     // All tier/score/rank STATE lives in the separately-deployed OnChainRewardModule (its own
@@ -371,10 +382,9 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
 
     modifier campaignTimeValid(uint256 _campaignId) {
         Campaign storage campaign = _campaigns[_campaignId];
-        require(
-            block.timestamp >= campaign.startTime && block.timestamp <= campaign.endTime,
-            "Campaign not in active period"
-        );
+        if (block.timestamp < campaign.startTime || block.timestamp > campaign.endTime) {
+            revert Web3Campaigns__NotInActivePeriod();
+        }
         _;
     }
 
@@ -400,7 +410,7 @@ abstract contract CampaignStorage is AccessControl, EIP712 {
      * @notice Rate limiting check
      */
     function _checkRateLimit(address _user) internal {
-        require(block.timestamp - _lastActivityTime[_user] >= RATE_LIMIT_COOLDOWN, "Rate limit: too many actions");
+        if (block.timestamp - _lastActivityTime[_user] < RATE_LIMIT_COOLDOWN) revert Web3Campaigns__RateLimited();
         _lastActivityTime[_user] = block.timestamp;
     }
 }
